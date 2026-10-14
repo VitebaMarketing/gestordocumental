@@ -34,6 +34,12 @@ const safeName = n => String(n).normalize('NFD').replace(/[̀-ͯ]/g, '').replace
 function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('No se pudo cargar ' + src)); document.head.appendChild(s); }); }
 function loadImage(src) { return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Imagen no válida')); i.src = src; }); }
 
+const recoverFlag = {
+  set(email) { try { localStorage.setItem('gf_recover', JSON.stringify({ email, t: Date.now() })); } catch { } },
+  get(email) { try { const f = JSON.parse(localStorage.getItem('gf_recover') || 'null'); return !!f && f.email === email && Date.now() - f.t < 2 * 3600e3; } catch { return false; } },
+  clear() { try { localStorage.removeItem('gf_recover'); } catch { } },
+};
+
 /* ---------- Almacenamiento: modo local (IndexedDB) ---------- */
 function localStore() {
   let db;
@@ -81,7 +87,7 @@ function localStore() {
 
 /* ---------- Almacenamiento: Supabase (multiusuario) ---------- */
 function supaStore() {
-  const recoveryInUrl = /type=recovery/.test(location.hash);
+  const recoveryInUrl = /type=recovery/.test(location.hash + location.search);
   const sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseAnonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit' } });
   let recovery = recoveryInUrl;
   sb.auth.onAuthStateChange(ev => { if (ev === 'PASSWORD_RECOVERY') recovery = true; });
@@ -112,6 +118,7 @@ function supaStore() {
         if (/not confirmed/i.test(error.message)) throw new Error('Tu correo aún no está confirmado: revisa tu bandeja de entrada.');
         throw new Error(error.message);
       }
+      recoverFlag.clear();
       return { email };
     },
     async signUp(email, pass) {
@@ -126,6 +133,7 @@ function supaStore() {
     async signOut() { await sb.auth.signOut(); },
     isRecovery: () => recovery,
     async resetPassword(email) {
+      recoverFlag.set(email);
       const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
       if (error) throw new Error(/rate limit|security purposes/i.test(error.message) ? 'Se han enviado demasiados correos. Espera unos minutos y vuelve a intentarlo.' : error.message);
       return {};
@@ -133,7 +141,7 @@ function supaStore() {
     async updatePassword(pass) {
       const { error } = await sb.auth.updateUser({ password: pass });
       if (error) throw new Error(/same/i.test(error.message) ? 'La nueva contraseña debe ser distinta de la anterior.' : error.message);
-      recovery = false;
+      recovery = false; recoverFlag.clear();
     },
   };
 }
@@ -389,6 +397,7 @@ async function afterLogin(email) {
     $('#menuBtn').onclick = () => $('#nav').classList.toggle('open');
     $('#userBtn').onclick = e => { e.stopPropagation(); $('#userDrop').hidden = !$('#userDrop').hidden; };
     document.addEventListener('click', () => { $('#userDrop').hidden = true; });
+    $('#chpass').onclick = () => { $('#userDrop').hidden = true; changePasswordDialog(); };
     $('#logout').onclick = async () => { await store.signOut(); location.hash = ''; location.reload(); };
     if (store.mode === 'local') $('#banner').innerHTML = `<div class="banner">${CFG.demoNote ? esc(CFG.demoNote) : 'Modo local de demostración: los datos solo se guardan en este navegador. Para que cada persona firme desde su equipo, conecta Supabase (ver README).'}</div>`;
     window.addEventListener('hashchange', render);
@@ -1043,6 +1052,22 @@ function openDialog(html, cls = '') {
   api.bindClose = () => $$('[data-x]', dlg).forEach(b => { b.onclick = () => dlg.close(); });
   api.bindClose(); dlg.showModal(); return api;
 }
+function changePasswordDialog() {
+  const dlg = openDialog(`<h2>Cambiar contraseña</h2><form id="cpd" class="form" novalidate>
+    <label>Nueva contraseña<input name="p1" type="password" minlength="6" autocomplete="new-password"></label>
+    <label>Repite la contraseña<input name="p2" type="password" minlength="6" autocomplete="new-password"></label>
+    <div class="err" id="cpderr"></div>
+    <div class="actions end"><button type="button" class="btn" data-x>Cancelar</button><button class="btn primary">Guardar contraseña</button></div></form>`, 'small');
+  setTimeout(() => $('#cpd input[name=p1]').focus(), 30);
+  $('#cpd').onsubmit = async e => {
+    e.preventDefault(); const f = e.target; $('#cpderr').textContent = '';
+    const p1 = f.elements.p1.value, p2 = f.elements.p2.value;
+    if (p1.length < 6) return ($('#cpderr').textContent = 'La contraseña debe tener al menos 6 caracteres.');
+    if (p1 !== p2) return ($('#cpderr').textContent = 'Las contraseñas no coinciden.');
+    try { await store.updatePassword(p1); dlg.close(); toast('Contraseña actualizada'); } catch (err) { $('#cpderr').textContent = err.message; }
+  };
+}
+
 function editSignatureDialog() {
   return new Promise(res => {
     const dlg = openDialog(`<h2>Mi firma</h2><p class="hint">Se incorporará en el cuadro de firmas de cada documento que apruebes.</p>${sigEditorHtml()}
@@ -1253,7 +1278,8 @@ function viewProfile(m) {
     document.title = CFG.appName;
     if (store.mode === 'local') { await seedIfEmpty(); try { await seedDemo(); } catch (e) { console.warn('demo', e); } }
     const email = await store.session();
-    if (email && store.isRecovery?.()) showNewPassword(email);
+    if (email && store.mode === 'supabase') await new Promise(r => setTimeout(r, 350));
+    if (email && (store.isRecovery?.() || (store.mode === 'supabase' && recoverFlag.get(email)))) showNewPassword(email);
     else if (email) await afterLogin(email); else showLogin();
   } catch (e) {
     console.error(e);

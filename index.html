@@ -6,11 +6,11 @@
   <title>Circuito de firmas</title>
   <meta name="description" content="Circuito de aprobación y firma de diseños.">
   <link rel="icon" type="image/png" href="assets/icon.png">
-  <link rel="stylesheet" href="styles.css">
-  <script src="config.js"></script>
+  <link rel="stylesheet" href="styles.css?v=4">
+  <script src="config.js?v=4"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js" defer></script>
-  <script src="app.js" defer></script>
+  <script src="app.js?v=4" defer></script>
 </head>
 <body>
   <div id="boot" class="boot"><img src="assets/logo.png" alt="Gafial Group" class="boot-logo"></div>
@@ -26,6 +26,7 @@
           <button id="userBtn" class="userbtn"></button>
           <div id="userDrop" class="drop-menu" hidden>
             <a href="#perfil">Mi perfil y firma</a>
+            <button id="chpass" type="button">Cambiar contraseña</button>
             <button id="logout" type="button">Cerrar sesión / cambiar de usuario</button>
           </div>
         </div>
