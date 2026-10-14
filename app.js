@@ -103,7 +103,7 @@ function supaStore() {
       return { email };
     },
     async signUp(email, pass) {
-      const { data, error } = await sb.auth.signUp({ email, password: pass });
+      const { data, error } = await sb.auth.signUp({ email, password: pass, options: { emailRedirectTo: location.origin + location.pathname } });
       if (error) {
         if (/already registered/i.test(error.message)) throw new Error('Este correo ya tiene acceso: la contraseña no es correcta.');
         throw new Error(error.message);
