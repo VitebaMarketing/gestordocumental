@@ -9,6 +9,6 @@
 window.APP_CONFIG = {
   appName: 'Circuito de firmas · Gafial Group',
   company: 'Gafial Group',
-  supabaseUrl: '',
-  supabaseAnonKey: '',
+  supabaseUrl: 'https://bazyaktqolapgjommuba.supabase.co',
+  supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJhenlha3Rxb2xhcGdqb21tdWJhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE5ODAyMzYsImV4cCI6MjEwNzU1NjIzNn0.XkoVbuo6P2oEw-TRCHxqcrLbVl5EB9XfaT82rFk6e3U',
 };
