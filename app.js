@@ -66,13 +66,25 @@ function localStore() {
       await store.put('users', u); localStorage.setItem('gf_session', email); return { email };
     },
     async signOut() { localStorage.removeItem('gf_session'); },
+    async resetPassword(email) {
+      const u = await store.get('users', email);
+      if (u) { delete u.passHash; delete u.salt; await store.put('users', u); }
+      return { local: true };
+    },
+    async updatePassword(pass) {
+      const email = localStorage.getItem('gf_session'); const u = await store.get('users', email);
+      u.salt = uid(); u.passHash = await sha256str(u.salt + pass); await store.put('users', u);
+    },
   };
   return store;
 }
 
 /* ---------- Almacenamiento: Supabase (multiusuario) ---------- */
 function supaStore() {
-  const sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseAnonKey, { auth: { persistSession: true, autoRefreshToken: true } });
+  const recoveryInUrl = /type=recovery/.test(location.hash);
+  const sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseAnonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit' } });
+  let recovery = recoveryInUrl;
+  sb.auth.onAuthStateChange(ev => { if (ev === 'PASSWORD_RECOVERY') recovery = true; });
   const BUCKET = 'documentos';
   const chk = ({ data, error }) => { if (error) throw new Error(error.message); return data; };
   return {
@@ -105,13 +117,24 @@ function supaStore() {
     async signUp(email, pass) {
       const { data, error } = await sb.auth.signUp({ email, password: pass, options: { emailRedirectTo: location.origin + location.pathname } });
       if (error) {
-        if (/already registered/i.test(error.message)) throw new Error('Este correo ya tiene acceso: la contraseña no es correcta.');
+        if (/already registered/i.test(error.message)) throw new Error('Este correo ya tiene cuenta y la contraseña no es correcta. Pulsa «¿Has olvidado tu contraseña?» para crear una nueva.');
         throw new Error(error.message);
       }
       if (!data.session) return { needsConfirm: true };
       return { email };
     },
     async signOut() { await sb.auth.signOut(); },
+    isRecovery: () => recovery,
+    async resetPassword(email) {
+      const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+      if (error) throw new Error(/rate limit|security purposes/i.test(error.message) ? 'Se han enviado demasiados correos. Espera unos minutos y vuelve a intentarlo.' : error.message);
+      return {};
+    },
+    async updatePassword(pass) {
+      const { error } = await sb.auth.updateUser({ password: pass });
+      if (error) throw new Error(/same/i.test(error.message) ? 'La nueva contraseña debe ser distinta de la anterior.' : error.message);
+      recovery = false;
+    },
   };
 }
 
@@ -270,6 +293,7 @@ function showLogin() {
         <label>Repite la contraseña<input name="pass2" type="password" minlength="6" autocomplete="new-password"></label></div>
       <div class="err" id="lerr"></div>
       <button class="btn primary big wide" id="lbtn">Entrar</button>
+      <p class="center" style="margin:10px 0 0"><button type="button" class="linkbtn" id="forgot">¿Has olvidado tu contraseña?</button></p>
       <p class="hint center">La primera vez, escribe tu correo y elige una contraseña (mín. 6 caracteres). Quedará recordada en este equipo.</p>
     </form>
     ${store.mode === 'local' ? `<div class="demo"><div class="hint center small"><b>Demo</b> · acceso rápido (contraseña <code>demo1234</code>)</div>
@@ -288,6 +312,18 @@ function showLogin() {
   })();
   const reset = () => { if (first) { first = false; $('#first').hidden = true; $('#lbtn').textContent = 'Entrar'; } };
   el('email').oninput = reset;
+  $('#forgot').onclick = async () => {
+    const email = normEmail(el('email').value); $('#lerr').textContent = '';
+    if (!isEmail(email)) { $('#lerr').textContent = 'Escribe primero tu correo y vuelve a pulsar «¿Has olvidado tu contraseña?».'; el('email').focus(); return; }
+    const b = $('#forgot'); b.disabled = true;
+    try {
+      const r = await store.resetPassword(email);
+      reset();
+      if (r.local) { el('pass').value = ''; $('#lerr').innerHTML = '<span style="color:var(--ok)">Contraseña borrada. Escribe una nueva y pulsa Entrar.</span>'; el('pass').focus(); }
+      else $('#lerr').innerHTML = `<span style="color:var(--ok)">Te hemos enviado un correo a <b>${esc(email)}</b> con un enlace para crear una nueva contraseña. Revisa también la carpeta de spam.</span>`;
+    } catch (err) { $('#lerr').textContent = err.message; }
+    finally { b.disabled = false; }
+  };
   f.onsubmit = async e => {
     e.preventDefault();
     const email = normEmail(el('email').value), pass = el('pass').value; const btn = $('#lbtn'); $('#lerr').textContent = '';
@@ -315,6 +351,34 @@ function showLogin() {
   };
 }
 
+function showNewPassword(email) {
+  $('#boot').hidden = true; $('#app').hidden = true;
+  const L = $('#login'); L.hidden = false;
+  L.innerHTML = `<div class="login-card">
+    <img class="logo" src="assets/logo.png" alt="Gafial Group">
+    <div class="sub">Crea tu nueva contraseña</div>
+    <form id="npf" class="form" novalidate>
+      <label>Correo<input value="${esc(email)}" readonly></label>
+      <label>Nueva contraseña<input name="p1" type="password" minlength="6" autocomplete="new-password" autofocus></label>
+      <label>Repite la contraseña<input name="p2" type="password" minlength="6" autocomplete="new-password"></label>
+      <div class="err" id="nperr"></div>
+      <button class="btn primary big wide" id="npbtn">Guardar y entrar</button>
+    </form></div>`;
+  const f = $('#npf');
+  f.onsubmit = async e => {
+    e.preventDefault(); $('#nperr').textContent = '';
+    const p1 = f.elements.p1.value, p2 = f.elements.p2.value;
+    if (p1.length < 6) return ($('#nperr').textContent = 'La contraseña debe tener al menos 6 caracteres.');
+    if (p1 !== p2) return ($('#nperr').textContent = 'Las contraseñas no coinciden.');
+    const b = $('#npbtn'); b.disabled = true;
+    try {
+      await store.updatePassword(p1);
+      history.replaceState(null, '', location.pathname + location.search);
+      toast('Contraseña actualizada'); await afterLogin(email);
+    } catch (err) { $('#nperr').textContent = err.message; b.disabled = false; }
+  };
+}
+
 let shellBound = false;
 async function afterLogin(email) {
   await seedIfEmpty();
@@ -329,6 +393,7 @@ async function afterLogin(email) {
     if (store.mode === 'local') $('#banner').innerHTML = `<div class="banner">${CFG.demoNote ? esc(CFG.demoNote) : 'Modo local de demostración: los datos solo se guardan en este navegador. Para que cada persona firme desde su equipo, conecta Supabase (ver README).'}</div>`;
     window.addEventListener('hashchange', render);
   }
+  if (/access_token=|type=recovery|error_description=/.test(location.hash)) history.replaceState(null, '', location.pathname + location.search);
   if (!ME.signature && !location.hash) location.hash = '#perfil';
   await render();
 }
@@ -1157,10 +1222,21 @@ function viewProfile(m) {
         <div class="sigprev">${ME.signature ? `<img src="${ME.signature}" alt="Mi firma">` : '<span class="hint">Aún no has registrado tu firma</span>'}</div>
         ${ME.signatureAt ? `<p class="hint">Registrada el ${fmtDT(ME.signatureAt)}</p>` : ''}</section>
     </div>
+    <section class="card"><h2>Cambiar contraseña</h2><form id="cpf" class="form" novalidate><div class="row">
+      <label>Nueva contraseña<input name="p1" type="password" minlength="6" autocomplete="new-password"></label>
+      <label>Repite la contraseña<input name="p2" type="password" minlength="6" autocomplete="new-password"></label></div>
+      <div class="err" id="cperr"></div><div class="actions" style="margin-top:0"><button class="btn">Cambiar contraseña</button></div></form></section>
     <section class="card"><h2>${ME.signature ? 'Cambiar mi firma' : 'Crear mi firma'}</h2><div id="sigEd">${sigEditorHtml()}</div>
       <div class="actions"><button class="btn primary" id="saveSig">Guardar firma</button></div></section>`;
   const ed = mountSigEditor($('#sigEd'));
   $('#saveSig').onclick = async () => { const s = ed.get(); if (!s) return uiAlert('Dibuja tu firma o adjunta una imagen.'); await saveMySignature(s); toast('Firma guardada'); render(); };
+  $('#cpf').onsubmit = async e => {
+    e.preventDefault(); const f = e.target; $('#cperr').textContent = '';
+    const p1 = f.elements.p1.value, p2 = f.elements.p2.value;
+    if (p1.length < 6) return ($('#cperr').textContent = 'La contraseña debe tener al menos 6 caracteres.');
+    if (p1 !== p2) return ($('#cperr').textContent = 'Las contraseñas no coinciden.');
+    try { await store.updatePassword(p1); f.reset(); toast('Contraseña actualizada'); } catch (err) { $('#cperr').textContent = err.message; }
+  };
   $('#pf').onsubmit = async e => {
     e.preventDefault();
     const u = (await store.get('users', ME.id)) || ME; u.name = e.target.elements.name.value.trim(); u.role = e.target.elements.role.value.trim();
@@ -1177,7 +1253,8 @@ function viewProfile(m) {
     document.title = CFG.appName;
     if (store.mode === 'local') { await seedIfEmpty(); try { await seedDemo(); } catch (e) { console.warn('demo', e); } }
     const email = await store.session();
-    if (email) await afterLogin(email); else showLogin();
+    if (email && store.isRecovery?.()) showNewPassword(email);
+    else if (email) await afterLogin(email); else showLogin();
   } catch (e) {
     console.error(e);
     $('#boot').innerHTML = `<div class="card"><b>No se pudo iniciar la aplicación.</b><p class="err">${esc(e.message)}</p></div>`;

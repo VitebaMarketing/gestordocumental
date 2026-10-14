@@ -275,3 +275,6 @@ dialog.xl .vscroll { height: min(64vh, calc(100vh - 230px)); }
 @media (prefers-reduced-motion: reduce) { .boot-logo { animation: none; } * { transition: none !important; } }
 
 .minisig .hint { color: #5b6478; }
+
+.linkbtn { background: none; border: 0; padding: 4px; font: inherit; font-size: 13px; color: var(--accent-ink); text-decoration: underline; cursor: pointer; }
+.linkbtn:disabled { opacity: .5; }
