@@ -2,52 +2,50 @@
 <html lang="es">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Circuito de firmas</title>
-  <meta name="description" content="Circuito de aprobación y firma de diseños.">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Circuito de firmas · Gafial Group</title>
+  <meta name="description" content="Plataforma de aprobación y firma de documentos de diseño de Gafial Group.">
   <link rel="icon" type="image/png" href="assets/icon.png">
-  <link rel="stylesheet" href="styles.css?v=4">
-  <script src="config.js?v=4"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="styles.css?v=5">
+  <script src="config.js?v=5"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js" defer></script>
-  <script src="app.js?v=4" defer></script>
+  <script src="app.js?v=5" defer></script>
 </head>
 <body>
-  <div id="boot" class="boot"><img src="assets/logo.png" alt="Gafial Group" class="boot-logo"></div>
+  <div id="boot" class="boot"><img src="assets/logo-white.png" alt="Gafial Group" class="boot-logo"></div>
   <section id="login" class="login" hidden></section>
 
-  <div id="app" hidden>
-    <header class="topbar">
-      <button class="icon menu-btn" id="menuBtn" aria-label="Menú">☰</button>
-      <a class="brand" href="#home" title="Inicio"><img src="assets/logo.png" alt="Gafial Group"></a>
-      <span class="brand-sub">Circuito de firmas</span>
-      <div class="topright">
-        <div class="usermenu">
-          <button id="userBtn" class="userbtn"></button>
-          <div id="userDrop" class="drop-menu" hidden>
-            <a href="#perfil">Mi perfil y firma</a>
-            <button id="chpass" type="button">Cambiar contraseña</button>
-            <button id="logout" type="button">Cerrar sesión / cambiar de usuario</button>
+  <div id="app" class="shell" hidden>
+    <aside class="side" id="side" aria-label="Navegación principal">
+      <a class="side-logo" href="#home" title="Inicio">
+        <img src="assets/logo-white.png" alt="Gafial Group" class="logo-full">
+        <img src="assets/icon-white.png" alt="Gafial Group" class="logo-mini">
+      </a>
+      <a href="#upload" class="side-cta" id="sideCta" title="Subir documento"></a>
+      <nav id="nav"></nav>
+      <div class="side-foot"><button type="button" class="side-collapse" id="collapseBtn"></button></div>
+    </aside>
+    <div class="shell-main">
+      <header class="topbar">
+        <button type="button" class="icon-btn menu-btn" id="menuBtn" aria-label="Abrir menú"></button>
+        <nav class="crumbs" id="crumbs" aria-label="Ruta"></nav>
+        <div class="top-actions">
+          <div class="dd-wrap">
+            <button type="button" class="icon-btn bell" id="bellBtn" aria-label="Notificaciones" aria-haspopup="true" aria-expanded="false"></button>
+            <div class="dd wide" id="bellDrop" hidden></div>
+          </div>
+          <div class="dd-wrap">
+            <button type="button" class="userbtn" id="userBtn" aria-haspopup="true" aria-expanded="false"></button>
+            <div class="dd" id="userDrop" hidden></div>
           </div>
         </div>
-      </div>
-    </header>
-    <div id="banner"></div>
-    <div class="layout">
-      <nav class="nav" id="nav">
-        <a href="#upload" class="nav-cta">⬆ Subir diseño a firma</a>
-        <a href="#home">Inicio <span class="count" id="cntPend"></span></a>
-        <a href="#docs">Estado de documentos</a>
-        <a href="#historico">Histórico aprobados</a>
-        <div class="nav-sep">Configuración</div>
-        <a href="#circuits">Circuitos de firma</a>
-        <a href="#cat/doctypes">Tipos de documento</a>
-        <a href="#cat/products">Productos</a>
-        <a href="#cat/prodcats">Categorías de producto</a>
-        <a href="#users">Usuarios</a>
-        <a href="#perfil">Mi perfil y firma</a>
-      </nav>
-      <main id="main" class="main"></main>
+      </header>
+      <div id="banner"></div>
+      <main id="main" class="main" tabindex="-1"></main>
     </div>
   </div>
   <dialog id="dlg"></dialog>
