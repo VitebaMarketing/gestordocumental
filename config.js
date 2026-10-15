@@ -17,12 +17,12 @@ window.APP_CONFIG = {
      Para activarlo: enabled: true y rellenar tenantId, clientId y siteUrl.
      --------------------------------------------------------------------- */
   sharepoint: {
-    enabled: false,
+    enabled: true,                // se activa en cuanto se rellenan tenantId y clientId
     tenantId: '',                 // ID de directorio (inquilino) de Microsoft Entra
     clientId: '',                 // ID de aplicación (cliente) registrada por IT
-    siteUrl: '',                  // p. ej. 'https://viteba.sharepoint.com/sites/Diseno'
-    library: '',                  // nombre de la biblioteca; vacío = biblioteca «Documentos» del sitio
-    rootFolder: 'Aprobaciones',   // carpeta principal dentro de la biblioteca
+    siteUrl: 'https://gafial.sharepoint.com/sites/VitebaSite',
+    // Carpeta raíz: «10.Circuitos de firma» (enlace de SharePoint a la carpeta)
+    rootShareUrl: 'https://gafial.sharepoint.com/:f:/s/VitebaSite/IgDHxzXRTmi_RLIdlL9il88gAayb_aZo-T90-I39KoJ0mu8?e=ZCwMzt',
     folders: {
       circuit: 'En circuito',     // documentos esperando firmas (y rechazados)
       approved: 'Aprobados',      // PDF firmado con el cuadro de firmas

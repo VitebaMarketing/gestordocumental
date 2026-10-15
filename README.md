@@ -116,7 +116,7 @@ Librerías externas, cargadas desde CDN: pdf.js (visor), pdf-lib (generación de
 Con SharePoint activado, los archivos se guardan y se leen desde vuestra biblioteca de SharePoint y se mueven solos entre carpetas según su estado:
 
 ```
-Aprobaciones/
+10.Circuitos de firma/   (sitio VitebaSite)
 ├── En circuito/<Tipo de documento>/<Código>/      ← esperando firmas (y rechazados)
 ├── Aprobados/<Tipo de documento>/<Código>/        ← PDF firmado con el cuadro de firmas
 │                                   └── Originales/  ← archivo original de esa versión
@@ -142,9 +142,9 @@ Si en algún momento alguien firma sin tener la cuenta conectada, la firma se re
      `https://vitebamarketing.github.io/gestordocumental/redirect.html`
 2. **Permisos de API → Microsoft Graph → Permisos delegados**: `Sites.ReadWrite.All` (y `User.Read`, que viene por defecto) → **Conceder consentimiento de administrador**.
 3. Copiar el **Id. de aplicación (cliente)** y el **Id. de directorio (inquilino)** (no son secretos).
-4. En SharePoint: decidir el **sitio** y la **biblioteca**, y dar permiso de **edición** en esa biblioteca a las personas que suben o firman. Las personas externas (otro dominio) deben estar invitadas en vuestro Microsoft 365.
+4. Crear un grupo **«Circuito de firmas»** con todas las personas de la plataforma y darle permiso de **edición** sobre la carpeta «10.Circuitos de firma» del sitio VitebaSite. Las personas de otro dominio (p. ej. @doribac.com) se incluyen igual; si no son del inquilino, se invitan como invitados.
 
-Después, en `config.js` → bloque `sharepoint`: `enabled: true`, `tenantId`, `clientId`, `siteUrl` (p. ej. `https://viteba.sharepoint.com/sites/Diseno`) y `library` (vacío = «Documentos»). Los nombres de las carpetas también se cambian ahí.
+Después, en `config.js` → bloque `sharepoint`, solo falta rellenar `tenantId` y `clientId`. El sitio (`VitebaSite`) y la carpeta raíz (`rootShareUrl`, enlace a «10.Circuitos de firma») ya están configurados. Los nombres de las subcarpetas también se cambian ahí.
 
 ### Etiquetas de privacidad
 

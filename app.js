@@ -1009,7 +1009,7 @@ function viewUpload(m, fromId) {
             <dt>Versión</dt><dd><span class="ver">V${vi.n}</span></dd>
             <dt>Comentario</dt><dd>${w.note.trim() ? esc(w.note.trim()) : '<span class="muted">Sin comentario</span>'}</dd></dl>
           ${vi.obsoletes ? `<div class="alert ${vi.supersede ? 'a-warn' : 'a-info'}" style="margin-top:16px">${icon(vi.supersede ? 'alert' : 'archive')}<div>Al enviar, la <b>V${vi.n - 1}</b> pasará a <b>Obsoleto</b>${vi.supersede ? ' y sus firmas pendientes dejarán de pedirse' : ''}${SPC.enabled ? ' y sus archivos se moverán a la carpeta de obsoletos en SharePoint' : ''}.</div></div>` : ''}
-          ${SPC.enabled ? (spConnected() ? `<div class="alert a-info" style="margin-top:16px">${icon('cloud')}<div>Se guardará en SharePoint en <b>${esc(spFolderLabel([SPC.rootFolder, SPC.folders.circuit, dt?.name || 'Sin tipo', w.code.trim()].map(spSafe).join('/')))}</b>.</div></div>`
+          ${SPC.enabled ? (spConnected() ? `<div class="alert a-info" style="margin-top:16px">${icon('cloud')}<div>Se guardará en SharePoint en <b>${esc(spFolderLabel([SPC.folders.circuit, dt?.name || 'Sin tipo', w.code.trim()].map(spSafe).join('/')))}</b>.</div></div>`
             : `<div class="alert a-warn" style="margin-top:16px">${icon('cloud')}<div><b>Conecta SharePoint para enviar.</b> Los documentos se guardan en la biblioteca de la empresa.</div><button type="button" class="btn sm" id="wzSp">Conectar SharePoint</button></div>`) : ''}
         </div><div><h3>Circuito: ${esc(c.name)}</h3><p class="muted" style="font-size:13px">${modeChip(c)} — ${modeText(c.order)}</p>${flowHtml(signerList(c), c.order)}
           <div class="alert a-info" style="margin:16px 0 0">${icon('mail')}<div>Al enviar podrás copiar el enlace del documento y avisar por correo a los firmantes.</div></div></div></div>`;
@@ -1279,14 +1279,14 @@ function shareDialog(d, justUploaded) {
    Los originales de versiones aprobadas u obsoletas van a la subcarpeta «Originales».
    ========================================================================= */
 const SPC = Object.assign({
-  enabled: false, tenantId: '', clientId: '', siteUrl: '', library: '', rootFolder: 'Aprobaciones',
+  enabled: false, tenantId: '', clientId: '', siteUrl: '', library: '', rootFolder: 'Aprobaciones', rootShareUrl: '',
   folders: {}, keepBackup: true, scopes: ['Sites.ReadWrite.All'],
   msalUrl: 'https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.39.0/lib/msal-browser.min.js',
 }, CFG.sharepoint || {});
 SPC.folders = Object.assign({ circuit: 'En circuito', approved: 'Aprobados', obsolete: 'Obsoletos', originals: 'Originales' }, SPC.folders || {});
-SPC.enabled = !!(SPC.enabled && SPC.tenantId && SPC.clientId && SPC.siteUrl);
+SPC.enabled = !!(SPC.enabled && SPC.tenantId && SPC.clientId && (SPC.siteUrl || SPC.rootShareUrl));
 const GRAPH = 'https://graph.microsoft.com/v1.0';
-const SP = { app: null, account: null, drive: null, folders: new Map(), busy: new Set(), ready: false, error: '' };
+const SP = { app: null, account: null, drive: null, rootPath: '', folders: new Map(), busy: new Set(), ready: false, error: '' };
 
 const spNeedLogin = () => { const e = new Error('Conecta tu cuenta de Microsoft para acceder a SharePoint.'); e.needLogin = true; return e; };
 const spConnected = () => !!(SPC.enabled && SP.account);
@@ -1318,7 +1318,7 @@ async function spConnect() {
   return r.account;
 }
 async function spDisconnect() {
-  const acc = SP.account; SP.account = null; SP.drive = null; SP.folders.clear();
+  const acc = SP.account; SP.account = null; SP.drive = null; SP.rootPath = ''; SP.folders.clear();
   try { if (acc && SP.app.logoutPopup) await SP.app.logoutPopup({ account: acc, mainWindowRedirectUri: spRedirectUri() }); } catch (e) { console.warn(e); }
 }
 async function gfetch(path, opts = {}) {
@@ -1335,6 +1335,19 @@ const encPath = p => p.split('/').map(encodeURIComponent).join('/');
 const spSafe = s => String(s ?? '').replace(/["*:<>?/\\|#%~&{}]/g, '-').replace(/\s+/g, ' ').trim().replace(/^[.\s]+|[.\s]+$/g, '') || 'Sin nombre';
 async function spDrive() {
   if (SP.drive) return SP.drive;
+  if (SPC.rootShareUrl) {
+    const enc = 'u!' + btoa(unescape(encodeURIComponent(SPC.rootShareUrl.trim()))).replace(/=+$/, '').replace(/\//g, '_').replace(/\+/g, '-');
+    let it;
+    try { it = await gfetch(`/shares/${enc}/driveItem?$select=id,name,webUrl,parentReference`); }
+    catch (e) { if (e.status === 403 || e.status === 404) throw new Error('No tienes acceso a la carpeta de circuitos de firma en SharePoint. Pide a IT que te añada al grupo.'); throw e; }
+    const parent = decodeURIComponent((it.parentReference?.path || '').replace(/^.*?root:/, '')).replace(/^\/+/, '');
+    SP.rootPath = [parent, it.name].filter(Boolean).join('/');
+    const drv = await gfetch(`/drives/${it.parentReference.driveId}?$select=id,webUrl`);
+    SP.drive = { id: drv.id, webUrl: drv.webUrl, siteUrl: SPC.siteUrl || drv.webUrl.replace(/\/[^/]+$/, ''), rootWebUrl: it.webUrl };
+    SP.folders.set(SP.rootPath, it.id);
+    return SP.drive;
+  }
+  SP.rootPath = SPC.rootFolder ? spSafe(SPC.rootFolder) : '';
   const u = new URL(SPC.siteUrl);
   const site = await gfetch(`/sites/${u.hostname}:${u.pathname.replace(/\/$/, '')}?$select=id,webUrl`);
   let drive;
@@ -1347,15 +1360,19 @@ async function spDrive() {
   SP.drive = { id: drive.id, webUrl: drive.webUrl, siteUrl: site.webUrl };
   return SP.drive;
 }
-async function spEnsureFolder(path) {
-  if (SP.folders.has(path)) return SP.folders.get(path);
+async function spEnsureFolder(rel) {
   const dr = await spDrive();
+  return spEnsureFull([SP.rootPath, rel].filter(Boolean).join('/'), dr);
+}
+async function spEnsureFull(path, dr) {
+  if (!path) return 'root';
+  if (SP.folders.has(path)) return SP.folders.get(path);
   let id;
   try { id = (await gfetch(`/drives/${dr.id}/root:/${encPath(path)}?$select=id`)).id; }
   catch (e) {
     if (e.status !== 404) throw e;
     const i = path.lastIndexOf('/'), parent = i > 0 ? path.slice(0, i) : '', name = path.slice(i + 1);
-    const pid = parent ? await spEnsureFolder(parent) : null;
+    const pid = parent ? await spEnsureFull(parent, dr) : null;
     const url = pid ? `/drives/${dr.id}/items/${pid}/children` : `/drives/${dr.id}/root/children`;
     try { id = (await gfetch(url, { method: 'POST', body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }) })).id; }
     catch (e2) { if (e2.status !== 409) throw e2; id = (await gfetch(`/drives/${dr.id}/root:/${encPath(path)}?$select=id`)).id; }
@@ -1411,7 +1428,7 @@ const spDlUrl = f => f?.uid && f?.siteUrl ? `${f.siteUrl.replace(/\/$/, '')}/_la
 function spStage(d, v) { return isObsolete(v) ? 'obsolete' : circuitStatus(d, v) === ST.APR ? 'approved' : 'circuit'; }
 function spFolder(d, v, kind) {
   const st = spStage(d, v);
-  const parts = [SPC.rootFolder, SPC.folders[st], byId('doctypes', d.docTypeId)?.name || 'Sin tipo', d.code].filter(Boolean).map(spSafe);
+  const parts = [SPC.folders[st], byId('doctypes', d.docTypeId)?.name || 'Sin tipo', d.code].filter(Boolean).map(spSafe);
   if (kind === 'original' && st !== 'circuit') parts.push(spSafe(SPC.folders.originals));
   return parts.join('/');
 }
@@ -1420,7 +1437,7 @@ function spName(d, v, kind) {
   const m = /^(.*?)(\.[^.]+)?$/.exec(v.fileName || 'documento');
   return spSafe(`${d.code}_V${v.n}_${m[1]}`) + (m[2] || '').toLowerCase();
 }
-const spFolderLabel = f => !f ? '' : f.split('/').slice(1).join(' › ');
+const spFolderLabel = f => !f ? '' : f.split('/').join(' › ');
 function spNeedsSync(d) {
   if (!SPC.enabled) return false;
   return d.versions.some(v => {
@@ -1520,7 +1537,7 @@ function spMenu(btn, pending) {
   if (!spConnected()) return connectSharePoint({ rerender: !location.hash.startsWith('#upload') });
   openMenu(btn, [
     { label: `Conectado como ${SP.account.username}`, ic: 'checkcircle', disabled: true },
-    { label: 'Abrir carpeta de aprobaciones', ic: 'cloud', act: async () => { try { const dr = await spDrive(); window.open(`${dr.webUrl}/${encPath(SPC.rootFolder)}`, '_blank', 'noopener'); } catch (e) { toast(e.message, 5000, 'error'); } } },
+    { label: 'Abrir carpeta de aprobaciones', ic: 'cloud', act: async () => { try { const dr = await spDrive(); window.open(dr.rootWebUrl || `${dr.webUrl}/${encPath(SP.rootPath)}`, '_blank', 'noopener'); } catch (e) { toast(e.message, 5000, 'error'); } } },
     { label: pending ? `Sincronizar ahora (${pending} pendientes)` : 'Todo sincronizado', ic: 'refresh', disabled: !pending, act: spSyncAll },
     '-',
     { label: 'Desconectar cuenta de Microsoft', ic: 'logout', act: async () => { await spDisconnect(); renderSpState(); toast('Cuenta de Microsoft desconectada', 2500, 'info'); } },
