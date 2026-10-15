@@ -7,7 +7,7 @@
 
 const CFG = Object.assign({ appName: 'Circuito de firmas', company: '', supabaseUrl: '', supabaseAnonKey: '' }, window.APP_CONFIG || {});
 const SUPABASE_JS = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js';
-const ST = { INC: 'En circuito', REJ: 'Rechazado', APR: 'Aprobado', SUP: 'Sustituida' };
+const ST = { INC: 'En circuito', REJ: 'Rechazado', APR: 'Aprobado', OBS: 'Obsoleto' };
 const BADGE = { 'En circuito': 'st-pending', 'Rechazado': 'st-ko', 'Aprobado': 'st-ok', 'Sustituida': 'st-muted', 'Pendiente': 'st-pending', 'Esperando turno': 'st-muted', 'OK': 'st-ok', '—': 'st-muted' };
 const COLLS = ['users', 'doctypes', 'prodcats', 'products', 'circuits', 'documents', 'signatures', 'events'];
 
@@ -255,8 +255,12 @@ function signerRows(d, v) {
   const sigs = sigsOf(d.id, v.n);
   return signerList(v).map((s, i) => ({ ...s, i, sig: sigs.find(x => x.email === s.email) }));
 }
+const isObsolete = v => !!(v && (v.obsolete || v.superseded));
 function verStatus(d, v) {
-  if (v.superseded) return ST.SUP;
+  const c = circuitStatus(d, v);
+  return c === ST.INC && isObsolete(v) ? ST.OBS : c;
+}
+function circuitStatus(d, v) {
   const rows = signerRows(d, v);
   if (rows.some(r => r.sig && r.sig.decision !== 'OK')) return ST.REJ;
   if (rows.length && rows.every(r => r.sig && r.sig.decision === 'OK')) return ST.APR;
@@ -355,6 +359,8 @@ const ICON_PATHS = {
   lock: '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
   split: '<path d="M16 3h5v5"/><path d="M8 3H3v5"/><path d="M12 22v-8.3a4 4 0 0 0-1.172-2.872L3 3"/><path d="m15 9 6-6"/>',
   listordered: '<line x1="10" x2="21" y1="6" y2="6"/><line x1="10" x2="21" y1="12" y2="12"/><line x1="10" x2="21" y1="18" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>',
+  cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
+  rotate: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
   shieldok: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>',
 };
 const icon = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[n] || ''}</svg>`;
@@ -382,11 +388,12 @@ function relTime(d) {
 }
 const STATUS_META = {
   'En circuito': ['info', 'clock'], 'Pendiente de mi firma': ['warn', 'pen'], 'Rechazado': ['danger', 'xcircle'], 'Aprobado': ['ok', 'checkcircle'],
-  'Sustituida': ['muted', 'layers'], 'Firmado': ['ok', 'check'], 'Pendiente': ['warn', 'clock'], 'Esperando turno': ['muted', 'hourglass'], '—': ['muted', 'minus'],
+  'Obsoleto': ['muted', 'archive'], 'Vigente': ['ok', 'shieldok'], 'Firmado': ['ok', 'check'], 'Pendiente': ['warn', 'clock'], 'Esperando turno': ['muted', 'hourglass'], '—': ['muted', 'minus'],
 };
 function sbadge(label) { const [t, i] = STATUS_META[label] || ['muted', 'info']; return `<span class="badge b-${t}">${icon(i)}${esc(label)}</span>`; }
 const badge = sbadge;
-const docLabel = (d, v = latest(d)) => (v.n === latest(d).n && canSign(d, ME.id)) ? 'Pendiente de mi firma' : verStatus(d, v);
+const docLabel = (d, v = latest(d)) => isObsolete(v) ? ST.OBS : (v.n === latest(d).n && canSign(d, ME.id)) ? 'Pendiente de mi firma' : verStatus(d, v);
+const vigBadge = (d, v) => isObsolete(v) ? sbadge(ST.OBS) : circuitStatus(d, v) === ST.APR ? sbadge('Vigente') : '';
 const isImg = v => /^image\//.test(v.fileType || '');
 const docCell = (d, v = latest(d)) => `<div class="doccell"><span class="fi ${isImg(v) ? 'img' : ''}">${icon(isImg(v) ? 'image' : 'filetext')}</span><span class="min0"><b>${esc(v.title || d.title)}</b><small class="mono">${esc(d.code)} · V${v.n}</small></span></div>`;
 function progress(d, v = latest(d)) {
@@ -413,6 +420,12 @@ function hflow(c) {
   return c.order === 'seq'
     ? `<div class="hflow">${list.map((s, i) => node(s, i) + (i < list.length - 1 ? `<span class="arrow">${icon('arrowright')}</span>` : '')).join('')}</div>`
     : `<div class="hflow"><div class="group"><span class="group-l">En paralelo</span>${list.map(node).join('')}</div></div>`;
+}
+
+function dlBtn(d, v, o = {}) {
+  const cls = o.cls || 'icon-btn sm', inner = o.label ? `${icon('download')}${o.label}` : icon('download'), id = o.id ? ` id="${o.id}"` : '';
+  if (SPC.enabled && v.sp?.signed) return `<a class="${cls}"${id} href="${esc(spDlUrl(v.sp.signed))}" target="_blank" rel="noopener" title="Descargar PDF firmado desde SharePoint" aria-label="Descargar PDF firmado de ${esc(d.code)} V${v.n}" data-dlog="${d.id}|${v.n}">${inner}</a>`;
+  return `<button type="button" class="${cls}"${id} data-dl="${d.id}|${v.n}" title="Descargar PDF firmado" aria-label="Descargar PDF firmado de ${esc(d.code)} V${v.n}">${inner}</button>`;
 }
 
 /* ---------- Avisos (toasts) ---------- */
@@ -598,6 +611,7 @@ function setCrumbs(items) {
   }).join('');
 }
 function renderTop() {
+  renderSpState();
   const mine = sortDocs(D.documents.filter(d => canSign(d, ME.id)));
   const myRejected = sortDocs(D.documents.filter(d => docStatus(d) === ST.REJ && latest(d).uploadedBy === ME.id)).slice(0, 5);
   const c = $('#cntPend'); if (c) { c.textContent = mine.length; c.hidden = !mine.length; }
@@ -630,7 +644,9 @@ async function afterLogin(email) {
   }
   if (/access_token=|type=recovery|error_description=/.test(location.hash)) history.replaceState(null, '', location.pathname + location.search);
   if (!ME.signature && !location.hash) location.hash = '#perfil';
+  await spInit();
   await render();
+  if (spConnected()) spSyncAll();
 }
 
 /* ---------- Router ---------- */
@@ -671,10 +687,11 @@ function bindRows(m) {
     tr.onkeydown = e => { if (e.key === 'Enter' && e.target === tr) location.hash = tr.dataset.href; };
   });
   $$('[data-dl]', m).forEach(b => { b.onclick = e => { e.stopPropagation(); const [id, n] = b.dataset.dl.split('|'); const d = byId('documents', id); downloadSigned(d, d.versions.find(x => x.n === +n)); }; });
+  $$('[data-dlog]', m).forEach(a => { a.onclick = e => { e.stopPropagation(); const [id, n] = a.dataset.dlog.split('|'); addEvent(id, `PDF firmado descargado · V${n}`, 'Desde SharePoint'); }; });
   $$('[data-menu]', m).forEach(b => { b.onclick = e => { e.stopPropagation(); const [id, n] = b.dataset.menu.split('|'); docMenu(b, byId('documents', id), +n); }; });
 }
 function docMenu(btn, d, n) {
-  const v = d.versions.find(x => x.n === n) || latest(d), apr = verStatus(d, v) === ST.APR, pend = n === latest(d).n ? pendingSigners(d) : [];
+  const v = d.versions.find(x => x.n === n) || latest(d), apr = circuitStatus(d, v) === ST.APR, pend = n === latest(d).n ? pendingSigners(d) : [];
   openMenu(btn, [
     { label: 'Ver detalle', ic: 'eye', act: () => { location.hash = '#doc/' + d.id; } },
     { label: 'Copiar enlace', ic: 'link', act: async () => { const ok = await copyText(docLink(d)); toast(ok ? 'Enlace copiado' : 'No se pudo copiar el enlace', 2500, ok ? 'ok' : 'error'); } },
@@ -682,6 +699,12 @@ function docMenu(btn, d, n) {
     { label: 'Subir nueva versión', ic: 'refresh', act: () => { location.hash = '#upload/' + d.id; } },
     '-',
     { label: 'Descargar PDF firmado', ic: 'download', disabled: !apr, title: apr ? '' : 'Disponible cuando hayan firmado todas las personas', act: () => downloadSigned(d, v) },
+    ...(apr ? [{ label: 'Vista previa del PDF firmado', ic: 'eye', act: () => downloadSigned(d, v, { preview: true }) }] : []),
+    ...(SPC.enabled && v.sp?.file ? [{ label: 'Abrir en SharePoint', ic: 'cloud', act: () => window.open((v.sp.signed || v.sp.file).webUrl, '_blank', 'noopener') }] : []),
+    '-',
+    n === latest(d).n
+      ? (isObsolete(v) ? { label: 'Marcar como vigente', ic: 'rotate', act: () => setVigencia(d, false) } : { label: 'Marcar como obsoleto', ic: 'archive', act: () => setVigencia(d, true) })
+      : { label: 'Versión obsoleta (hay una más reciente)', ic: 'archive', disabled: true },
   ]);
 }
 
@@ -703,13 +726,16 @@ function pendingTable(list) {
       <td class="act"><a class="btn primary sm" href="#doc/${d.id}">${icon('pen')}Revisar y firmar</a></td></tr>`; }).join('')}</tbody></table></div>`;
 }
 function approvedTable(items) {
-  return `<div class="tablewrap"><table class="tbl"><thead><tr><th>Documento</th><th>Tipo</th><th>Participantes</th><th>Aprobado</th><th class="act"></th></tr></thead><tbody>
+  return `<div class="tablewrap"><table class="tbl"><thead><tr><th>Documento</th><th>Tipo</th><th>Participantes</th><th>Aprobado</th><th>Vigencia</th><th class="act"></th></tr></thead><tbody>
     ${items.map(({ d, v, at }) => `<tr data-href="#doc/${d.id}" tabindex="0"><td>${docCell(d, v)}</td><td>${esc(byId('doctypes', d.docTypeId)?.name || '—')}</td>
-      <td>${avStack(signerList(v).map(s => s.email))}</td><td class="nowrap">${fmtDay(at)}<small>${fmtTime(at).slice(0, 5)}</small></td>
-      <td class="act"><button class="icon-btn sm" data-dl="${d.id}|${v.n}" title="Descargar PDF firmado" aria-label="Descargar PDF firmado de ${esc(d.code)} V${v.n}">${icon('download')}</button></td></tr>`).join('')}</tbody></table></div>`;
+      <td>${avStack(signerList(v).map(s => s.email))}</td><td class="nowrap">${fmtDay(at)}<small>${fmtTime(at).slice(0, 5)}</small></td><td>${vigBadge(d, v)}</td>
+      <td class="act">${dlBtn(d, v)}</td></tr>`).join('')}</tbody></table></div>`;
 }
 function eventInfo(e) {
   const a = e.action || '';
+  if (/^SharePoint/.test(a)) return ['info', 'cloud', 'SharePoint ·'];
+  if (/^Marcado obsoleto/.test(a)) return ['', 'archive', 'ha marcado como obsoleto'];
+  if (/^Marcado vigente/.test(a)) return ['ok', 'rotate', 'ha marcado como vigente'];
   if (/^Firmado OK/.test(a)) return ['ok', 'check', 'ha firmado'];
   if (/^Rechazado/.test(a)) return ['ko', 'xcircle', 'ha rechazado'];
   if (/^APROBADO/.test(a)) return ['ok', 'checkcircle', 'Documento aprobado:'];
@@ -732,7 +758,7 @@ function viewHome(m) {
   const appr = approvedList();
   const name = ME.name || ME.id.split('@')[0];
   const kpi = (n, label, ic, tone, href) => `<a class="kpi k-${tone}" href="${href}"><span class="kpi-ic">${icon(ic)}</span><span class="kpi-body"><b>${n}</b><span>${label}</span></span>${icon('chevronright', 'kpi-go')}</a>`;
-  const events = D.events.filter(e => byId('documents', e.docId)).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 7);
+  const events = D.events.filter(e => byId('documents', e.docId) && e.action !== 'SharePoint').sort((a, b) => b.at.localeCompare(a.at)).slice(0, 7);
   m.innerHTML = `
     ${ME.signature ? '' : `<div class="alert a-warn">${icon('alert')}<div><b>Aún no has registrado tu firma.</b> La necesitas para firmar documentos.</div><a class="btn sm" href="#perfil">Crear mi firma</a></div>`}
     <section class="hero"><div><h1>Hola, ${esc(name)}</h1><p>Gestiona aquí los documentos que requieren firma y sigue su estado en tiempo real.</p>
@@ -762,13 +788,13 @@ const LS = {};
 const DOC_FILTERS = { pendientes: 'Pendiente de mi firma', circuito: ST.INC, rechazado: ST.REJ, aprobado: ST.APR, todos: '' };
 const PAGE = 12;
 function listPage(m, cfg) {
-  const s = LS[cfg.key] || (LS[cfg.key] = { q: '', status: '', type: '', circ: '', d1: '', d2: '', sort: 'date', dir: 'desc', page: 1 });
+  const s = LS[cfg.key] || (LS[cfg.key] = { q: '', status: '', vig: '', type: '', circ: '', d1: '', d2: '', sort: 'date', dir: 'desc', page: 1 });
   if (cfg.forceStatus !== undefined) { s.status = cfg.forceStatus; s.page = 1; }
-  const statusOpts = ['Pendiente de mi firma', ST.INC, ST.REJ, ST.APR];
+  const statusOpts = ['Pendiente de mi firma', ST.INC, ST.REJ, ST.APR, ST.OBS];
   m.innerHTML = pageHead(cfg.title, cfg.sub, `<a class="btn primary" href="#upload">${icon('plus')}Subir documento</a>`) + `
     <section class="card flush"><div class="filters" role="search">
       <div class="search">${icon('search')}<input id="fq" type="search" placeholder="${esc(cfg.ph)}" value="${esc(s.q)}" aria-label="Buscar"></div>
-      ${cfg.approved ? '' : `<select id="fs" aria-label="Estado"><option value="">Todos los estados</option>${statusOpts.map(x => `<option ${x === s.status ? 'selected' : ''}>${x}</option>`).join('')}</select>`}
+      ${cfg.approved ? `<select id="fv" aria-label="Vigencia"><option value="">Vigentes y obsoletos</option><option value="vig" ${s.vig === 'vig' ? 'selected' : ''}>Solo vigentes</option><option value="obs" ${s.vig === 'obs' ? 'selected' : ''}>Solo obsoletos</option></select>` : `<select id="fs" aria-label="Estado"><option value="">Todos los estados</option>${statusOpts.map(x => `<option ${x === s.status ? 'selected' : ''}>${x}</option>`).join('')}</select>`}
       <select id="ft" aria-label="Tipo de documento"><option value="">Todos los tipos</option>${D.doctypes.map(t => `<option value="${esc(t.id)}" ${t.id === s.type ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>
       <select id="fc" aria-label="Circuito"><option value="">Todos los circuitos</option>${D.circuits.map(c => `<option value="${esc(c.id)}" ${c.id === s.circ ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
       <div class="daterange" title="${cfg.approved ? 'Fecha de aprobación' : 'Fecha de solicitud'}">${icon('calendar')}<input type="date" id="fd1" value="${s.d1}" aria-label="Desde"><span>–</span><input type="date" id="fd2" value="${s.d2}" aria-label="Hasta"></div>
@@ -790,7 +816,12 @@ function listPage(m, cfg) {
     const base = cfg.approved ? approvedList() : D.documents.map(d => ({ d, v: latest(d) }));
     const list = base.filter(it => {
       const { d, v } = it;
-      if (s.status) { if (s.status === 'Pendiente de mi firma' ? !canSign(d, ME.id) : verStatus(d, v) !== s.status) return false; }
+      if (s.status) {
+        if (s.status === 'Pendiente de mi firma') { if (!canSign(d, ME.id)) return false; }
+        else if (s.status === ST.OBS) { if (!isObsolete(v)) return false; }
+        else if (isObsolete(v) || verStatus(d, v) !== s.status) return false;
+      }
+      if (s.vig && (s.vig === 'obs') !== isObsolete(v)) return false;
       if (s.type && d.docTypeId !== s.type) return false;
       if (s.circ && d.circuitId !== s.circ) return false;
       if (q) {
@@ -804,7 +835,7 @@ function listPage(m, cfg) {
     list.sort((a, b) => { const x = sortVal(a, s.sort), y = sortVal(b, s.sort); const c = x < y ? -1 : x > y ? 1 : 0; return s.dir === 'asc' ? c : -c; });
     const pages = Math.max(1, Math.ceil(list.length / PAGE)); s.page = Math.min(s.page, pages);
     const slice = list.slice((s.page - 1) * PAGE, s.page * PAGE);
-    const anyFilter = s.q || s.status || s.type || s.circ || s.d1 || s.d2;
+    const anyFilter = s.q || s.status || s.vig || s.type || s.circ || s.d1 || s.d2;
     $('#fclear').hidden = !anyFilter;
     if (!list.length) {
       $('#res').innerHTML = anyFilter ? emptyState('search', 'Ningún documento coincide con los filtros', 'Prueba con otra búsqueda o limpia los filtros.', `<button type="button" class="btn" id="fclear2">Limpiar filtros</button>`)
@@ -813,14 +844,14 @@ function listPage(m, cfg) {
       return;
     }
     const head = cfg.approved
-      ? `${th('name', 'Documento')}${th('type', 'Tipo')}${th('ver', 'Versión')}<th>Participantes</th>${th('date', 'Aprobado')}<th class="act"></th>`
+      ? `${th('name', 'Documento')}${th('type', 'Tipo')}${th('ver', 'Versión')}<th>Participantes</th>${th('date', 'Aprobado')}<th>Vigencia</th><th class="act"></th>`
       : `${th('name', 'Documento')}${th('type', 'Tipo')}${th('req', 'Solicitante')}${th('date', 'Fecha')}${th('prog', 'Firmas')}${th('status', 'Estado')}<th class="act"></th>`;
     const row = it => {
       const { d, v } = it; const dt = esc(byId('doctypes', d.docTypeId)?.name || '—');
       return cfg.approved
         ? `<tr data-href="#doc/${d.id}" tabindex="0"><td>${docCell(d, v)}</td><td>${dt}</td><td><span class="ver">V${v.n}</span>${v.n !== latest(d).n ? `<small>vigente: V${latest(d).n}</small>` : ''}</td>
-           <td>${avStack(signerList(v).map(x => x.email))}</td><td class="nowrap">${fmtDay(it.at)}<small>${fmtTime(it.at).slice(0, 5)}</small></td>
-           <td class="act"><button class="icon-btn sm" data-dl="${d.id}|${v.n}" title="Descargar PDF firmado" aria-label="Descargar PDF firmado">${icon('download')}</button><button class="icon-btn sm" data-menu="${d.id}|${v.n}" aria-label="Más acciones">${icon('more')}</button></td></tr>`
+           <td>${avStack(signerList(v).map(x => x.email))}</td><td class="nowrap">${fmtDay(it.at)}<small>${fmtTime(it.at).slice(0, 5)}</small></td><td>${vigBadge(d, v)}</td>
+           <td class="act">${dlBtn(d, v)}<button class="icon-btn sm" data-menu="${d.id}|${v.n}" aria-label="Más acciones">${icon('more')}</button></td></tr>`
         : `<tr data-href="#doc/${d.id}" tabindex="0"><td>${docCell(d, v)}</td><td>${dt}</td><td>${who(v.uploadedBy)}</td><td class="nowrap">${fmtDay(v.uploadedAt)}<small>${fmtTime(v.uploadedAt).slice(0, 5)}</small></td>
            <td>${progress(d, v)}</td><td>${sbadge(docLabel(d, v))}</td><td class="act"><button class="icon-btn sm" data-menu="${d.id}|${v.n}" aria-label="Acciones de ${esc(d.code)}">${icon('more')}</button></td></tr>`;
     };
@@ -831,9 +862,9 @@ function listPage(m, cfg) {
     $$('[data-sort]', $('#res')).forEach(b => { b.onclick = () => { const k = b.dataset.sort; if (s.sort === k) s.dir = s.dir === 'asc' ? 'desc' : 'asc'; else { s.sort = k; s.dir = (k === 'date' || k === 'ver' || k === 'prog') ? 'desc' : 'asc'; } draw(); }; });
     if ($('#pgPrev')) { $('#pgPrev').onclick = () => { s.page--; draw(); }; $('#pgNext').onclick = () => { s.page++; draw(); }; }
   };
-  const clear = () => { Object.assign(s, { q: '', status: '', type: '', circ: '', d1: '', d2: '', page: 1 }); ['fq', 'fs', 'ft', 'fc', 'fd1', 'fd2'].forEach(id => { if ($('#' + id)) $('#' + id).value = ''; }); draw(); };
+  const clear = () => { Object.assign(s, { q: '', status: '', vig: '', type: '', circ: '', d1: '', d2: '', page: 1 }); ['fq', 'fs', 'fv', 'ft', 'fc', 'fd1', 'fd2'].forEach(id => { if ($('#' + id)) $('#' + id).value = ''; }); draw(); };
   const bindF = (id, k) => { const e = $('#' + id); if (e) e.oninput = () => { s[k] = e.value; s.page = 1; draw(); }; };
-  bindF('fq', 'q'); bindF('fs', 'status'); bindF('ft', 'type'); bindF('fc', 'circ'); bindF('fd1', 'd1'); bindF('fd2', 'd2');
+  bindF('fq', 'q'); bindF('fs', 'status'); bindF('fv', 'vig'); bindF('ft', 'type'); bindF('fc', 'circ'); bindF('fd1', 'd1'); bindF('fd2', 'd2');
   $('#fclear').onclick = clear;
   draw();
 }
@@ -846,7 +877,7 @@ function viewDocs(m, f) {
 }
 function viewHistory(m) {
   setCrumbs([['Histórico aprobados']]);
-  return listPage(m, { key: 'hist', approved: true, title: 'Histórico aprobados', sub: 'Documentos firmados por todas las personas de su circuito, con sus versiones.', ph: 'Buscar por nombre, código, producto o firmante…',
+  return listPage(m, { key: 'hist', approved: true, title: 'Histórico aprobados', sub: 'Documentos firmados por todas las personas de su circuito, con sus versiones y su vigencia.', ph: 'Buscar por nombre, código, producto o firmante…',
     emptyTitle: 'Aún no hay documentos aprobados', emptyText: 'Cuando todas las personas de un circuito firmen un documento, aparecerá aquí.' });
 }
 
@@ -870,7 +901,7 @@ function viewUpload(m, fromId) {
   const body = $('#wzBody');
   const product = () => D.products.find(p => p.code.toLowerCase() === w.code.trim().toLowerCase());
   const circuit = () => byId('circuits', w.circuitId);
-  const verInfo = () => { const ex = w.code.trim() && w.circuitId ? findExisting(w.code, w.circuitId) : null; return ex ? { n: latest(ex).n + 1, ex, supersede: docStatus(ex) === ST.INC } : { n: 1 }; };
+  const verInfo = () => { const ex = w.code.trim() && w.circuitId ? findExisting(w.code, w.circuitId) : null; return ex ? { n: latest(ex).n + 1, ex, supersede: docStatus(ex) === ST.INC, obsoletes: !isObsolete(latest(ex)) } : { n: 1 }; };
   const missing = step => {
     if (step >= 1 && !w.file) return 'Selecciona el documento.';
     if (step >= 2) {
@@ -879,6 +910,7 @@ function viewUpload(m, fromId) {
       if (!byId('doctypes', w.docTypeId)) return 'Elige el tipo de documento.';
     }
     if (step >= 3) { const c = circuit(); if (!c) return 'Elige un circuito de firma.'; if (!signerList(c).length) return 'El circuito elegido no tiene firmantes.'; }
+    if (step >= 4 && SPC.enabled && !spConnected()) return 'Conecta SharePoint para enviar el documento.';
     return '';
   };
   const fileCard = (f, removable = true) => `<div class="filecard"><span class="fi">${icon(/^image\//.test(f.type) ? 'image' : 'filetext')}</span><div><b>${esc(f.name)}</b><small>${fmtSize(f.size)} · ${/pdf/.test(f.type) || /\.pdf$/i.test(f.name) ? 'PDF' : f.type.replace('image/', '').toUpperCase()}</small></div>
@@ -910,7 +942,7 @@ function viewUpload(m, fromId) {
           <span class="drop-ic">${icon('upload')}</span><b>Arrastra y suelta tu archivo aquí</b><span class="muted">o haz clic para seleccionarlo</span>
           <span class="btn primary sm">Seleccionar archivo</span><small class="muted">PDF, JPG o PNG · máximo 50 MB</small></div>
         ${w.file ? fileCard(w.file) : ''}
-        ${vi ? `<div class="alert a-info" style="margin-top:14px">${icon('info')}<div>Se subirá como <b>V${vi.n}</b> de <b class="mono">${esc(from.code)}</b>${vi.sup ? `. La V${vi.n - 1}, todavía en circuito, quedará sustituida.` : '.'}</div></div>` : ''}
+        ${vi ? `<div class="alert a-info" style="margin-top:14px">${icon('info')}<div>Se subirá como <b>V${vi.n}</b> de <b class="mono">${esc(from.code)}</b>. La V${vi.n - 1} pasará a <b>Obsoleto</b>${vi.sup ? ' y sus firmas pendientes dejarán de pedirse' : ''}.</div></div>` : ''}
         </div>
         <aside class="tips"><h3>${icon('bulb')}Consejos</h3><ul>
           <li>Sube el arte final definitivo: es exactamente lo que se revisará y firmará.</li>
@@ -959,7 +991,7 @@ function viewUpload(m, fromId) {
         ${c ? `<div class="card" style="margin:0;background:var(--surface-2)"><div class="card-h"><h2>Participantes · ${esc(c.name)}</h2><button type="button" class="btn sm" id="editCirc">${icon('pencil')}Editar circuito</button></div>
           <p class="muted" style="font-size:13px">${modeChip(c)} — ${modeText(c.order)}</p>${flowHtml(signerList(c), c.order)}</div>
           <div class="alert ${vi.supersede ? 'a-warn' : 'a-info'}" style="margin:16px 0 0">${icon(vi.supersede ? 'alert' : 'layers')}<div>${vi.ex
-            ? `Ya existe <b class="mono">${esc(vi.ex.code)}</b> en este circuito (V${vi.n - 1} · ${esc(docStatus(vi.ex))}). Este archivo se registrará como <b>V${vi.n}</b>${vi.supersede ? ` y la V${vi.n - 1}, que sigue en circuito, quedará sustituida` : ''}.`
+            ? `Ya existe <b class="mono">${esc(vi.ex.code)}</b> en este circuito (V${vi.n - 1} · ${esc(docStatus(vi.ex))}). Este archivo se registrará como <b>V${vi.n}</b>${vi.obsoletes ? ` y la V${vi.n - 1} pasará a <b>Obsoleto</b>${vi.supersede ? ' (sus firmas pendientes dejarán de pedirse)' : ''}` : ''}.`
             : 'Se registrará como <b>V1</b> de este código de material en este circuito.'}</div></div>` : ''}`;
       $$('input[name=circ]', body).forEach(r => { r.onchange = () => { w.circuitId = r.value; draw(); }; });
       $('#newCirc').onclick = async () => { const nc = await editCircuit(null); if (nc && nc.id) w.circuitId = nc.id; draw(); };
@@ -976,9 +1008,12 @@ function viewUpload(m, fromId) {
             <dt>Producto</dt><dd>${p ? esc(p.name) + (cat ? ` · ${esc(cat.name)}` : '') : '<span class="muted">Código nuevo · se añadirá a Productos</span>'}</dd>
             <dt>Versión</dt><dd><span class="ver">V${vi.n}</span></dd>
             <dt>Comentario</dt><dd>${w.note.trim() ? esc(w.note.trim()) : '<span class="muted">Sin comentario</span>'}</dd></dl>
-          ${vi.supersede ? `<div class="alert a-warn" style="margin-top:16px">${icon('alert')}<div>La <b>V${vi.n - 1}</b> sigue en circuito. Al enviar esta versión quedará sustituida y sus firmas pendientes dejarán de pedirse.</div></div>` : ''}
+          ${vi.obsoletes ? `<div class="alert ${vi.supersede ? 'a-warn' : 'a-info'}" style="margin-top:16px">${icon(vi.supersede ? 'alert' : 'archive')}<div>Al enviar, la <b>V${vi.n - 1}</b> pasará a <b>Obsoleto</b>${vi.supersede ? ' y sus firmas pendientes dejarán de pedirse' : ''}${SPC.enabled ? ' y sus archivos se moverán a la carpeta de obsoletos en SharePoint' : ''}.</div></div>` : ''}
+          ${SPC.enabled ? (spConnected() ? `<div class="alert a-info" style="margin-top:16px">${icon('cloud')}<div>Se guardará en SharePoint en <b>${esc(spFolderLabel([SPC.rootFolder, SPC.folders.circuit, dt?.name || 'Sin tipo', w.code.trim()].map(spSafe).join('/')))}</b>.</div></div>`
+            : `<div class="alert a-warn" style="margin-top:16px">${icon('cloud')}<div><b>Conecta SharePoint para enviar.</b> Los documentos se guardan en la biblioteca de la empresa.</div><button type="button" class="btn sm" id="wzSp">Conectar SharePoint</button></div>`) : ''}
         </div><div><h3>Circuito: ${esc(c.name)}</h3><p class="muted" style="font-size:13px">${modeChip(c)} — ${modeText(c.order)}</p>${flowHtml(signerList(c), c.order)}
           <div class="alert a-info" style="margin:16px 0 0">${icon('mail')}<div>Al enviar podrás copiar el enlace del documento y avisar por correo a los firmantes.</div></div></div></div>`;
+      if ($('#wzSp')) $('#wzSp').onclick = async () => { await connectSharePoint({ rerender: false }); draw(); };
     },
   };
   const draw = () => {
@@ -997,7 +1032,7 @@ function viewUpload(m, fromId) {
     if (missing(w.step)) return upd();
     if (w.step < 4) return go(w.step + 1);
     const vi = verInfo();
-    if (vi.supersede && !(await uiConfirm(`La V${vi.n - 1} de ${w.code.trim()} sigue en circuito y quedará sustituida por esta V${vi.n}.`, 'Enviar y sustituir', { title: '¿Sustituir la versión en curso?', tone: 'warn' }))) return;
+    if (vi.supersede && !(await uiConfirm(`La V${vi.n - 1} de ${w.code.trim()} sigue en circuito. Pasará a Obsoleto y sus firmas pendientes dejarán de pedirse.`, 'Enviar nueva versión', { title: '¿Dejar obsoleta la versión en curso?', tone: 'warn' }))) return;
     await submit();
   };
   const submit = async () => {
@@ -1015,17 +1050,23 @@ function viewUpload(m, fromId) {
       else doc = { id: 'doc-' + uid(), code, title, docTypeId: dt.id, circuitId: c.id, createdBy: ME.id, createdAt: now(), versions: [] };
       const prev = doc.versions.length ? latest(doc) : null;
       const n = prev ? prev.n + 1 : 1;
-      const path = `docs/${doc.id}/v${n}/${Date.now()}_${safeName(file.name)}`;
-      await store.putFile(path, buf, type);
-      let superseded = false;
-      if (prev && verStatus(doc, prev) === ST.INC) { prev.superseded = true; superseded = true; }
+      const keepCopy = !SPC.enabled || SPC.keepBackup !== false;
+      const path = keepCopy ? `docs/${doc.id}/v${n}/${Date.now()}_${safeName(file.name)}` : null;
+      if (keepCopy) await store.putFile(path, buf, type);
+      let obsoleted = false;
+      if (prev && !isObsolete(prev)) { prev.obsolete = { at: now(), by: ME.id, reason: `Nueva versión V${n}` }; obsoleted = true; }
       doc.versions.push({ n, fileName: file.name, fileType: type, path, hash, size: file.size, uploadedBy: ME.id, uploadedAt: now(),
         title, note: w.note.trim(), signers: signerList(c).map(s => ({ email: s.email, role: s.role || userOf(s.email)?.role || '' })), order: c.order || 'any', circuitName: c.name });
       doc.title = title; doc.docTypeId = dt.id;
       await store.put('documents', doc);
       if (!D.products.some(p => p.code.toLowerCase() === code.toLowerCase()))
         await store.put('products', { id: 'p-' + uid(), code, name: title, categoryId: '', description: '', createdAt: now() });
-      await addEvent(doc.id, `Subida V${n}`, `${file.name} · circuito ${c.name}${superseded ? ` · V${prev.n} sustituida` : ''}`);
+      await addEvent(doc.id, `Subida V${n}`, `${file.name} · circuito ${c.name}${obsoleted ? ` · V${prev.n} pasa a obsoleto` : ''}`);
+      if (SPC.enabled) {
+        btn.innerHTML = `${icon('cloud')}Guardando en SharePoint…`;
+        const r = await spSync(doc.id, { bytes: { [n]: buf } });
+        if (!r.ok) toast('El documento se ha enviado, pero no se pudo guardar en SharePoint: ' + (r.error?.message || 'conecta SharePoint') + '. Se reintentará automáticamente.', 8000, 'error');
+      }
       pendingShare = doc.id;
       location.hash = '#doc/' + doc.id;
     } catch (err) {
@@ -1051,7 +1092,9 @@ function viewDoc(m, id) {
   setCrumbs([['Estado de documentos', '#docs'], [d.code]]);
 
   let actionBox = '';
-  if (mine) actionBox = `<section class="card sign-box" id="signBox"><h2>Tu firma</h2><p class="muted" style="font-size:13px;margin-top:4px">Revisa el documento en la vista previa. Si está correcto, firma con tu OK.</p>
+  const obs = isObsolete(v);
+  if (obs) actionBox = `<div class="alert a-warn">${icon('archive')}<div><b>Documento obsoleto</b>${v.obsolete?.by ? ` · marcado por ${esc(uname(v.obsolete.by))}` : ''}${v.obsolete?.at ? ` el ${fmtDT(v.obsolete.at)}` : ''}.${st === ST.OBS ? ' Sus firmas pendientes ya no se piden.' : ''}<div style="margin-top:8px"><button type="button" class="btn sm" id="setVig">${icon('rotate')}Marcar como vigente</button></div></div></div>`;
+  else if (mine) actionBox = `<section class="card sign-box" id="signBox"><h2>Tu firma</h2><p class="muted" style="font-size:13px;margin-top:4px">Revisa el documento en la vista previa. Si está correcto, firma con tu OK.</p>
       <div class="mysig">${ME.signature ? `<img src="${ME.signature}" alt="Tu firma">` : `<span class="muted">${icon('alert', 'ic-warn')} Aún no tienes firma registrada</span>`}<button type="button" class="linkbtn" id="editSig">${ME.signature ? 'Cambiar' : 'Crear firma'}</button></div>
       <label class="fld">Comentario <span class="muted" style="font-weight:400">(obligatorio si rechazas)</span><textarea id="cmt" rows="2" placeholder="Opcional al firmar"></textarea></label>
       <div class="sign-actions"><button type="button" class="btn danger" id="signKo">${icon('x')}Rechazar</button><button type="button" class="btn primary" id="signOk">${icon('pen')}Firmar documento</button></div></section>`;
@@ -1071,11 +1114,12 @@ function viewDoc(m, id) {
   m.innerHTML = `
     <div class="page-h doc-h"><div class="min0">
         <div class="eyebrow mono">${esc(d.code)}</div>
-        <h1 class="doc-title"><span>${esc(v.title || d.title)}</span><span id="docStatus">${sbadge(label)}</span></h1>
+        <h1 class="doc-title"><span>${esc(v.title || d.title)}</span><span id="docStatus">${sbadge(label)}</span>${!obs && circuitStatus(d, v) === ST.APR ? sbadge('Vigente') : ''}</h1>
         <div class="meta"><span>${icon('file')}<b>${esc(dt?.name || '—')}</b></span><span>${icon('user')}Solicitante: <b>${esc(uname(v.uploadedBy))}</b></span>
-          <span>${icon('calendar')}${fmtDT(v.uploadedAt)}</span><span>${icon('layers')}Versión <b>V${v.n}</b></span></div></div>
+          <span>${icon('calendar')}${fmtDT(v.uploadedAt)}</span><span>${icon('layers')}Versión <b>V${v.n}</b></span>
+          ${SPC.enabled ? `<span id="spMeta">${icon('cloud')}${v.sp?.file ? `SharePoint: <a href="${esc(v.sp.file.webUrl)}" target="_blank" rel="noopener"><b>${esc(SPC.folders[spStage(d, v)])}</b></a>${spNeedsSync(d) ? ' <span class="badge b-warn">Pendiente de mover</span>' : ''}` : '<span class="badge b-warn">Pendiente de guardar en SharePoint</span>'}</span>` : ''}</div></div>
       <div class="page-actions">
-        ${st === ST.APR ? `<button type="button" class="btn primary" id="dl">${icon('download')}Descargar PDF firmado</button>` : ''}
+        ${circuitStatus(d, v) === ST.APR ? dlBtn(d, v, { cls: 'btn primary', label: 'Descargar PDF firmado', id: 'dl' }) : ''}
         <button type="button" class="btn" id="share">${icon('link')}Compartir</button>
         <button type="button" class="btn" id="moreAct" aria-haspopup="menu">Acciones${icon('chevrondown')}</button></div></div>
     <div class="doc-grid">
@@ -1098,8 +1142,8 @@ function viewDoc(m, id) {
       return `<li><span class="tl-ic ${tone}">${icon(ic)}</span><div class="tl-b">${sys ? `<b>Documento aprobado</b> · ${esc(e.action.replace('APROBADO · ', ''))}` : `<b>${esc(uname(e.email))}</b> ${esc(verb.replace(/ (de|sobre)$/, ''))}${/^(Firmado|Rechazado)/.test(e.action) ? ` la ${esc(e.action.split('· ')[1] || '')}` : ''}`}
         ${e.detail && !/^APROBADO/.test(e.action) ? `<small>${esc(e.detail)}</small>` : ''}<small>${fmtDTs(e.at)}</small></div></li>`; }).join('')}</ol>` : emptyState('history', 'Sin actividad registrada', '', '', true),
     vers: () => `<div class="tablewrap" style="margin:0 -20px -20px;border-top:1px solid var(--border)"><table class="tbl"><thead><tr><th>Versión</th><th>Archivo</th><th>Subido por</th><th>Fecha</th><th>Firmas</th><th>Estado</th><th class="act"></th></tr></thead><tbody>
-      ${d.versions.slice().reverse().map(x => { const s = verStatus(d, x); return `<tr><td><span class="ver">V${x.n}</span></td><td>${esc(x.fileName)}<small>${x.size ? fmtSize(x.size) : ''}</small></td><td>${who(x.uploadedBy)}</td><td class="nowrap">${fmtDT(x.uploadedAt)}</td>
-        <td>${progress(d, x)}</td><td>${sbadge(s)}</td><td class="act">${s === ST.APR ? `<button type="button" class="btn sm" data-dlv="${x.n}">${icon('download')}PDF firmado</button>` : ''}</td></tr>`; }).join('')}</tbody></table></div>`,
+      ${d.versions.slice().reverse().map(x => { const s = verStatus(d, x), ca = circuitStatus(d, x) === ST.APR; return `<tr><td><span class="ver">V${x.n}</span></td><td>${esc(x.fileName)}<small>${x.size ? fmtSize(x.size) : ''}</small></td><td>${who(x.uploadedBy)}</td><td class="nowrap">${fmtDT(x.uploadedAt)}</td>
+        <td>${progress(d, x)}</td><td>${sbadge(s)} ${s !== ST.OBS ? vigBadge(d, x) : ''}</td><td class="act">${ca ? dlBtn(d, x, { cls: 'btn sm', label: 'PDF firmado' }) : ''}</td></tr>`; }).join('')}</tbody></table></div>`,
     info: () => `<dl class="dl">
       <dt>Código de material</dt><dd class="mono">${esc(d.code)}</dd>
       <dt>Producto</dt><dd>${p ? esc(p.name) + (cat ? ' · ' + esc(cat.name) : '') : '—'}</dd>
@@ -1108,18 +1152,24 @@ function viewDoc(m, id) {
       <dt>Archivo original</dt><dd>${esc(v.fileName)}${v.size ? ` · ${fmtSize(v.size)}` : ''}</dd>
       ${v.note ? `<dt>Comentario</dt><dd>${esc(v.note)}</dd>` : ''}
       ${st === ST.APR ? `<dt>Aprobado</dt><dd>${fmtDTs(approvedAt(d, v))}</dd>` : ''}
+      <dt>Vigencia</dt><dd>${obs ? `Obsoleto${v.obsolete?.reason ? ` · ${esc(v.obsolete.reason)}` : ''}` : circuitStatus(d, v) === ST.APR ? 'Vigente' : 'En curso'}</dd>
+      ${SPC.enabled ? `<dt>SharePoint</dt><dd>${v.sp?.file ? `<a href="${esc(v.sp.file.webUrl)}" target="_blank" rel="noopener">${esc(v.sp.file.name)}</a><small class="muted" style="display:block">${esc(spFolderLabel(v.sp.file.folder))}</small>` : '<span class="muted">Pendiente de guardar</span>'}
+        ${v.sp?.signed ? `<div style="margin-top:6px"><a href="${esc(v.sp.signed.webUrl)}" target="_blank" rel="noopener">${esc(v.sp.signed.name)}</a><small class="muted" style="display:block">${esc(spFolderLabel(v.sp.signed.folder))}</small></div>` : ''}
+        ${spNeedsSync(d) ? `<div style="margin-top:8px"><button type="button" class="btn sm" id="spSyncNow">${icon('refresh')}Sincronizar ahora</button></div>` : ''}</dd>` : ''}
       <dt>Huella SHA-256</dt><dd class="mono" style="font-size:12px;word-break:break-all">${v.hash}</dd></dl>
       <div class="alert a-info" style="margin:16px 0 0">${icon('shield')}<div>La huella identifica el archivo original. Si el archivo cambiara lo más mínimo, la huella sería distinta.</div></div>`,
   };
   const showTab = k => {
     $$('[data-tab]', m).forEach(b => { const on = b.dataset.tab === k; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); });
     $('#tabBody').innerHTML = tabs[k]();
-    $$('[data-dlv]', m).forEach(b => { b.onclick = () => downloadSigned(d, d.versions.find(x => x.n === +b.dataset.dlv)); });
+    bindRows($('#tabBody'));
+    if ($('#spSyncNow')) $('#spSyncNow').onclick = async () => { await spSyncReport(d.id); render(); };
   };
   $$('[data-tab]', m).forEach(b => { b.onclick = () => showTab(b.dataset.tab); });
   showTab('hist');
 
-  if ($('#dl')) $('#dl').onclick = () => downloadSigned(d);
+  bindRows($('.page-actions', m));
+  if ($('#setVig')) $('#setVig').onclick = () => setVigencia(d, false);
   if ($('#notify')) $('#notify').onclick = () => shareDialog(d, false);
   $('#share').onclick = () => shareDialog(d, false);
   $('#moreAct').onclick = e => { e.stopPropagation(); docMenu(e.currentTarget, d, v.n); };
@@ -1143,12 +1193,33 @@ function viewDoc(m, id) {
     const x = d.versions.find(y => y.n === n); const box = $('#viewer');
     box.innerHTML = '<div class="sk" style="height:60vh"></div>';
     try {
-      const buf = await store.getFile(x.path); if (!buf) throw new Error('Archivo no encontrado');
-      const stop = await mountViewer(box, buf, x.fileType); if (stop) cleanups.push(stop);
+      let r = await getVersionBytes(x), stop;
+      try { stop = await mountViewer(box, r.buf, x.fileType); }
+      catch (e) { if (r.source !== 'sp' || !x.path) throw e; console.warn('Copia de SharePoint no legible, se usa la copia interna', e); r = await getVersionBytes(x, { preferBackup: true }); stop = await mountViewer(box, r.buf, x.fileType); }
+      if (stop) cleanups.push(stop);
+      if (SPC.enabled) $('.vinfo', box).insertAdjacentHTML('beforebegin', `<span class="vsrc ${r.source}" title="${r.source === 'sp' ? 'Leído desde SharePoint' : 'Copia interna de la plataforma'}">${icon(r.source === 'sp' ? 'cloud' : 'archive')}${r.source === 'sp' ? 'SharePoint' : 'Copia interna'}</span>`);
     } catch (e) { box.innerHTML = `<div class="alert a-danger">${icon('alert')}<div>No se pudo mostrar el documento: ${esc(e.message)}</div></div>`; }
   };
   if ($('#vsel')) $('#vsel').onchange = e => loadVersion(+e.target.value);
   loadVersion(v.n);
+  if (spConnected() && spNeedsSync(d) && !SP.busy.has(d.id)) spSyncReport(d.id, true).then(r => { if (r?.log?.length && location.hash === '#doc/' + d.id) render(); });
+}
+
+async function setVigencia(d, obsolete) {
+  const fresh = (await store.get('documents', d.id)) || d, v = latest(fresh);
+  const inCirc = circuitStatus(fresh, v) === ST.INC;
+  const ok = obsolete
+    ? await uiConfirm(`${d.code} · V${v.n} pasará a Obsoleto${inCirc ? ' y sus firmas pendientes dejarán de pedirse' : ''}.${SPC.enabled ? ' Sus archivos se moverán a la carpeta de obsoletos en SharePoint.' : ''}`, 'Marcar como obsoleto', { title: '¿Marcar como obsoleto?', tone: 'warn', ic: 'archive' })
+    : await uiConfirm(`${d.code} · V${v.n} volverá a estar vigente${inCirc ? ' y el circuito de firma continuará' : ''}.${SPC.enabled ? ' Sus archivos volverán a su carpeta en SharePoint.' : ''}`, 'Marcar como vigente', { title: '¿Marcar como vigente?', ic: 'rotate' });
+  if (!ok) return;
+  if (obsolete) v.obsolete = { at: now(), by: ME.id, reason: 'Marcado manualmente' };
+  else { delete v.obsolete; delete v.superseded; }
+  await store.put('documents', fresh);
+  const i = D.documents.findIndex(x => x.id === d.id); if (i >= 0) D.documents[i] = fresh;
+  await addEvent(d.id, obsolete ? `Marcado obsoleto · V${v.n}` : `Marcado vigente · V${v.n}`);
+  toast(obsolete ? 'Documento marcado como obsoleto' : 'Documento marcado como vigente');
+  await spSyncReport(d.id, true);
+  render();
 }
 
 async function doSign(d, decision, comment) {
@@ -1161,7 +1232,15 @@ async function doSign(d, decision, comment) {
   try { await store.add('signatures', s); } catch (e) { uiAlert('No se pudo registrar la firma: ' + e.message, { tone: 'danger', title: 'Error' }); return render(); }
   D.signatures.push(s);
   await addEvent(d.id, decision === 'OK' ? `Firmado OK · V${v.n}` : `Rechazado · V${v.n}`, comment);
-  if (verStatus(fresh, v) === ST.APR) { await addEvent(d.id, `APROBADO · V${v.n}`, 'Todas las firmas completadas'); toast('Documento aprobado: ya puedes descargar el PDF firmado', 5000); }
+  const approved = verStatus(fresh, v) === ST.APR;
+  if (approved) await addEvent(d.id, `APROBADO · V${v.n}`, 'Todas las firmas completadas');
+  if (approved && SPC.enabled) {
+    if (spConnected()) {
+      toast('Documento aprobado. Guardando el PDF firmado en SharePoint…', 3000, 'info');
+      const r = await spSync(d.id);
+      toast(r.ok ? 'PDF firmado guardado en SharePoint' : 'No se pudo guardar en SharePoint: ' + (r.error?.message || '') + '. Se reintentará.', r.ok ? 4000 : 7000, r.ok ? 'ok' : 'error');
+    } else toast('Documento aprobado. Se guardará en SharePoint cuando alguien con la cuenta conectada lo abra.', 6000, 'info');
+  } else if (approved) toast('Documento aprobado: ya puedes descargar el PDF firmado', 5000);
   else toast(decision === 'OK' ? 'Firma registrada' : 'Documento rechazado', 3400, decision === 'OK' ? 'ok' : 'info');
   render();
 }
@@ -1190,6 +1269,273 @@ function shareDialog(d, justUploaded) {
   $('#shLink').onclick = e => e.target.select();
   $('#shCopy').onclick = async () => { const ok = await copyText(link); $('#shCopy').innerHTML = ok ? `${icon('check')}Copiado` : 'Selecciona y copia'; if (!ok) $('#shLink').select(); };
   $('#shMail').onclick = () => { addEvent(d.id, 'Aviso por correo preparado', to.join(', ')); };
+}
+
+
+/* =========================================================================
+   SHAREPOINT (Microsoft Graph, permisos delegados de cada usuario)
+   Los archivos viven en SharePoint y se mueven entre carpetas según el estado:
+     <raíz>/<En circuito | Aprobados | Obsoletos>/<Tipo de documento>/<Código>/
+   Los originales de versiones aprobadas u obsoletas van a la subcarpeta «Originales».
+   ========================================================================= */
+const SPC = Object.assign({
+  enabled: false, tenantId: '', clientId: '', siteUrl: '', library: '', rootFolder: 'Aprobaciones',
+  folders: {}, keepBackup: true, scopes: ['Sites.ReadWrite.All'],
+  msalUrl: 'https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.39.0/lib/msal-browser.min.js',
+}, CFG.sharepoint || {});
+SPC.folders = Object.assign({ circuit: 'En circuito', approved: 'Aprobados', obsolete: 'Obsoletos', originals: 'Originales' }, SPC.folders || {});
+SPC.enabled = !!(SPC.enabled && SPC.tenantId && SPC.clientId && SPC.siteUrl);
+const GRAPH = 'https://graph.microsoft.com/v1.0';
+const SP = { app: null, account: null, drive: null, folders: new Map(), busy: new Set(), ready: false, error: '' };
+
+const spNeedLogin = () => { const e = new Error('Conecta tu cuenta de Microsoft para acceder a SharePoint.'); e.needLogin = true; return e; };
+const spConnected = () => !!(SPC.enabled && SP.account);
+const spRedirectUri = () => location.origin + location.pathname.replace(/[^/]*$/, '') + 'redirect.html';
+async function spInit() {
+  if (!SPC.enabled || SP.app) return;
+  try {
+    if (!window.msal) await loadScript(SPC.msalUrl);
+    SP.app = new msal.PublicClientApplication({
+      auth: { clientId: SPC.clientId, authority: `https://login.microsoftonline.com/${SPC.tenantId}`, redirectUri: spRedirectUri() },
+      cache: { cacheLocation: 'localStorage' },
+    });
+    if (SP.app.initialize) await SP.app.initialize();
+    const accs = SP.app.getAllAccounts();
+    SP.account = accs.find(a => normEmail(a.username) === ME?.id) || accs[0] || null;
+    SP.ready = true;
+  } catch (e) { console.error(e); SP.error = 'No se pudo cargar el inicio de sesión de Microsoft: ' + e.message; }
+}
+async function spToken() {
+  if (!SP.app || !SP.account) throw spNeedLogin();
+  try { return (await SP.app.acquireTokenSilent({ scopes: SPC.scopes, account: SP.account })).accessToken; }
+  catch (e) { console.warn(e); throw spNeedLogin(); }
+}
+async function spConnect() {
+  if (!SP.app) await spInit();
+  if (!SP.app) throw new Error(SP.error || 'Microsoft no está disponible.');
+  const r = await SP.app.loginPopup({ scopes: SPC.scopes, loginHint: ME?.id, prompt: 'select_account' });
+  SP.account = r.account;
+  return r.account;
+}
+async function spDisconnect() {
+  const acc = SP.account; SP.account = null; SP.drive = null; SP.folders.clear();
+  try { if (acc && SP.app.logoutPopup) await SP.app.logoutPopup({ account: acc, mainWindowRedirectUri: spRedirectUri() }); } catch (e) { console.warn(e); }
+}
+async function gfetch(path, opts = {}) {
+  const token = await spToken();
+  const res = await fetch(path.startsWith('http') ? path : GRAPH + path, { ...opts, headers: { Authorization: 'Bearer ' + token, ...(opts.body && !(opts.body instanceof ArrayBuffer) && !(opts.body instanceof Blob) ? { 'Content-Type': 'application/json' } : {}), ...(opts.headers || {}) } });
+  if (!res.ok) {
+    let msg = ''; try { const j = await res.json(); msg = j.error?.message || ''; } catch { }
+    const e = new Error(res.status === 403 ? 'No tienes permiso para escribir en esta carpeta de SharePoint.' : res.status === 401 ? 'La sesión de Microsoft ha caducado.' : `SharePoint (${res.status}) ${msg}`);
+    e.status = res.status; if (res.status === 401) e.needLogin = true; throw e;
+  }
+  return res.status === 204 ? null : res.json();
+}
+const encPath = p => p.split('/').map(encodeURIComponent).join('/');
+const spSafe = s => String(s ?? '').replace(/["*:<>?/\\|#%~&{}]/g, '-').replace(/\s+/g, ' ').trim().replace(/^[.\s]+|[.\s]+$/g, '') || 'Sin nombre';
+async function spDrive() {
+  if (SP.drive) return SP.drive;
+  const u = new URL(SPC.siteUrl);
+  const site = await gfetch(`/sites/${u.hostname}:${u.pathname.replace(/\/$/, '')}?$select=id,webUrl`);
+  let drive;
+  if (SPC.library) {
+    const ds = (await gfetch(`/sites/${site.id}/drives?$select=id,name,webUrl`)).value || [];
+    const want = SPC.library.trim().toLowerCase();
+    drive = ds.find(x => x.name.toLowerCase() === want || decodeURIComponent(x.webUrl || '').toLowerCase().replace(/\/$/, '').endsWith('/' + want));
+    if (!drive) throw new Error(`No se encuentra la biblioteca «${SPC.library}» en el sitio de SharePoint.`);
+  } else drive = await gfetch(`/sites/${site.id}/drive?$select=id,name,webUrl`);
+  SP.drive = { id: drive.id, webUrl: drive.webUrl, siteUrl: site.webUrl };
+  return SP.drive;
+}
+async function spEnsureFolder(path) {
+  if (SP.folders.has(path)) return SP.folders.get(path);
+  const dr = await spDrive();
+  let id;
+  try { id = (await gfetch(`/drives/${dr.id}/root:/${encPath(path)}?$select=id`)).id; }
+  catch (e) {
+    if (e.status !== 404) throw e;
+    const i = path.lastIndexOf('/'), parent = i > 0 ? path.slice(0, i) : '', name = path.slice(i + 1);
+    const pid = parent ? await spEnsureFolder(parent) : null;
+    const url = pid ? `/drives/${dr.id}/items/${pid}/children` : `/drives/${dr.id}/root/children`;
+    try { id = (await gfetch(url, { method: 'POST', body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }) })).id; }
+    catch (e2) { if (e2.status !== 409) throw e2; id = (await gfetch(`/drives/${dr.id}/root:/${encPath(path)}?$select=id`)).id; }
+  }
+  SP.folders.set(path, id);
+  return id;
+}
+async function spMeta(id, folder) {
+  const dr = await spDrive();
+  const it = await gfetch(`/drives/${dr.id}/items/${id}?$select=id,name,webUrl,sharepointIds,size`);
+  return { id: it.id, name: it.name, webUrl: it.webUrl, uid: it.sharepointIds?.listItemUniqueId || '', siteUrl: it.sharepointIds?.siteUrl || dr.siteUrl, folder, size: it.size };
+}
+async function spUpload(folder, name, buf, type) {
+  const dr = await spDrive(), fid = await spEnsureFolder(folder);
+  const data = buf instanceof ArrayBuffer ? buf : buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+  let item;
+  if (data.byteLength <= 4 * 1048576) {
+    item = await gfetch(`/drives/${dr.id}/items/${fid}:/${encodeURIComponent(name)}:/content?@microsoft.graph.conflictBehavior=replace`, { method: 'PUT', body: data, headers: { 'Content-Type': type || 'application/octet-stream' } });
+  } else {
+    const ses = await gfetch(`/drives/${dr.id}/items/${fid}:/${encodeURIComponent(name)}:/createUploadSession`, { method: 'POST', body: JSON.stringify({ item: { '@microsoft.graph.conflictBehavior': 'replace' } }) });
+    const CH = 320 * 1024 * 12;
+    for (let off = 0; off < data.byteLength; off += CH) {
+      const end = Math.min(off + CH, data.byteLength);
+      const r = await fetch(ses.uploadUrl, { method: 'PUT', body: data.slice(off, end), headers: { 'Content-Range': `bytes ${off}-${end - 1}/${data.byteLength}` } });
+      if (!r.ok) throw new Error(`SharePoint: error al subir el archivo (${r.status})`);
+      if (end === data.byteLength) item = await r.json();
+    }
+  }
+  return spMeta(item.id, folder);
+}
+async function spMove(file, folder, name) {
+  const dr = await spDrive(), fid = await spEnsureFolder(folder);
+  const body = JSON.stringify({ parentReference: { id: fid }, name });
+  try { await gfetch(`/drives/${dr.id}/items/${file.id}`, { method: 'PATCH', body }); }
+  catch (e) {
+    if (e.status === 404) return null;
+    if (e.status !== 409) throw e;
+    await gfetch(`/drives/${dr.id}/items/${file.id}?@microsoft.graph.conflictBehavior=rename`, { method: 'PATCH', body });
+  }
+  return spMeta(file.id, folder);
+}
+async function spDownload(file) {
+  const dr = await spDrive();
+  const it = await gfetch(`/drives/${dr.id}/items/${file.id}`);
+  const url = it['@microsoft.graph.downloadUrl'];
+  if (!url) throw new Error('SharePoint no ha devuelto el enlace de descarga.');
+  const r = await fetch(url); if (!r.ok) throw new Error(`SharePoint: no se pudo leer el archivo (${r.status})`);
+  return r.arrayBuffer();
+}
+const spDlUrl = f => f?.uid && f?.siteUrl ? `${f.siteUrl.replace(/\/$/, '')}/_layouts/15/download.aspx?UniqueId=${f.uid}` : f?.webUrl;
+
+/* ---------- Dónde debe estar cada archivo ---------- */
+function spStage(d, v) { return isObsolete(v) ? 'obsolete' : circuitStatus(d, v) === ST.APR ? 'approved' : 'circuit'; }
+function spFolder(d, v, kind) {
+  const st = spStage(d, v);
+  const parts = [SPC.rootFolder, SPC.folders[st], byId('doctypes', d.docTypeId)?.name || 'Sin tipo', d.code].filter(Boolean).map(spSafe);
+  if (kind === 'original' && st !== 'circuit') parts.push(spSafe(SPC.folders.originals));
+  return parts.join('/');
+}
+function spName(d, v, kind) {
+  if (kind === 'signed') return spSafe(`${d.code}_V${v.n}_APROBADO`) + '.pdf';
+  const m = /^(.*?)(\.[^.]+)?$/.exec(v.fileName || 'documento');
+  return spSafe(`${d.code}_V${v.n}_${m[1]}`) + (m[2] || '').toLowerCase();
+}
+const spFolderLabel = f => !f ? '' : f.split('/').slice(1).join(' › ');
+function spNeedsSync(d) {
+  if (!SPC.enabled) return false;
+  return d.versions.some(v => {
+    const sp = v.sp || {};
+    if (!sp.file) return !!v.path;
+    if (sp.file.folder !== spFolder(d, v, 'original')) return true;
+    if (circuitStatus(d, v) === ST.APR) return !sp.signed || sp.signed.folder !== spFolder(d, v, 'signed');
+    return false;
+  });
+}
+/* Lleva los archivos de un documento a su carpeta. Es idempotente: se puede repetir sin riesgo. */
+async function spSync(docId, opts = {}) {
+  if (!SPC.enabled) return { ok: true, skipped: true };
+  if (!SP.account) return { ok: false, needLogin: true };
+  if (SP.busy.has(docId)) return { ok: true, busy: true };
+  SP.busy.add(docId);
+  const log = [];
+  try {
+    const d = await store.get('documents', docId); if (!d) return { ok: true };
+    for (const v of d.versions) {
+      v.sp = v.sp || {};
+      const of = spFolder(d, v, 'original'), on = spName(d, v, 'original');
+      if (!v.sp.file || (opts.force && !v.sp.file)) {
+        const buf = opts.bytes?.[v.n] || (v.path ? await store.getFile(v.path) : null);
+        if (buf) { v.sp.file = await spUpload(of, on, buf, v.fileType); log.push(`V${v.n}: archivo guardado en ${spFolderLabel(of)}`); }
+      } else if (v.sp.file.folder !== of) {
+        const moved = await spMove(v.sp.file, of, on);
+        if (moved) { v.sp.file = moved; log.push(`V${v.n}: archivo movido a ${spFolderLabel(of)}`); }
+        else { const buf = v.path ? await store.getFile(v.path) : null; if (buf) { v.sp.file = await spUpload(of, on, buf, v.fileType); log.push(`V${v.n}: archivo restaurado en ${spFolderLabel(of)}`); } }
+      }
+      if (circuitStatus(d, v) === ST.APR) {
+        const sf = spFolder(d, v, 'signed'), sn = spName(d, v, 'signed');
+        let moved = null;
+        if (v.sp.signed && v.sp.signed.folder !== sf) { moved = await spMove(v.sp.signed, sf, sn); if (moved) { v.sp.signed = moved; log.push(`V${v.n}: PDF firmado movido a ${spFolderLabel(sf)}`); } else v.sp.signed = null; }
+        if (!v.sp.signed) {
+          const bytes = await buildSignedPdf(d, v);
+          v.sp.signed = await spUpload(sf, sn, bytes, 'application/pdf'); log.push(`V${v.n}: PDF firmado guardado en ${spFolderLabel(sf)}`);
+        }
+      }
+    }
+    if (log.length) {
+      const fresh = await store.get('documents', docId);
+      fresh.versions.forEach(fv => { const m = d.versions.find(x => x.n === fv.n); if (m?.sp) fv.sp = m.sp; });
+      await store.put('documents', fresh);
+      const i = D.documents.findIndex(x => x.id === docId); if (i >= 0) D.documents[i] = fresh;
+      for (const l of log) await addEvent(docId, 'SharePoint', l);
+    }
+    return { ok: true, log };
+  } catch (e) { console.error(e); return { ok: false, error: e, needLogin: !!e.needLogin }; }
+  finally { SP.busy.delete(docId); }
+}
+async function spSyncReport(docId, quiet = false) {
+  if (!SPC.enabled) return;
+  if (!SP.account) { if (!quiet) toast('Conecta SharePoint para guardar los cambios en las carpetas', 4500, 'info'); renderSpState(); return; }
+  if (!quiet) toast('Sincronizando con SharePoint…', 1500, 'info');
+  const r = await spSync(docId);
+  if (!r.ok) toast(r.needLogin ? 'Vuelve a conectar SharePoint' : 'SharePoint: ' + (r.error?.message || 'error'), 6000, 'error');
+  else if (r.log?.length && !quiet) toast('SharePoint actualizado', 2500);
+  renderSpState();
+  return r;
+}
+async function spSyncAll() {
+  if (!spConnected()) return;
+  const docs = D.documents.filter(spNeedsSync);
+  if (!docs.length) return;
+  toast(`Sincronizando ${docs.length} documento${docs.length > 1 ? 's' : ''} con SharePoint…`, 2500, 'info');
+  let ok = 0, fail = 0;
+  for (const d of docs) { const r = await spSync(d.id); r.ok ? ok++ : fail++; if (r.needLogin) break; }
+  toast(fail ? `SharePoint: ${ok} sincronizados, ${fail} con error` : `${ok} documento${ok > 1 ? 's' : ''} sincronizado${ok > 1 ? 's' : ''} con SharePoint`, 4000, fail ? 'error' : 'ok');
+  renderSpState();
+}
+/* Lee el archivo de una versión: SharePoint primero; la copia interna solo si SharePoint no está disponible. */
+async function getVersionBytes(v, { preferBackup = false } = {}) {
+  const fromSp = async () => ({ buf: await spDownload(v.sp.file), source: 'sp' });
+  if (SPC.enabled && v.sp?.file && !preferBackup && SP.account) { try { return await fromSp(); } catch (e) { if (!v.path) throw e; console.warn(e); } }
+  if (v.path) { const b = await store.getFile(v.path); if (b) return { buf: b, source: 'backup' }; }
+  if (SPC.enabled && v.sp?.file) { if (!SP.account) throw spNeedLogin(); return fromSp(); }
+  throw new Error('No se encuentra el archivo.');
+}
+function renderSpState() {
+  const chip = $('#spChip'); if (!chip) return;
+  if (!SPC.enabled) { chip.hidden = true; $('#spBanner')?.remove(); return; }
+  chip.hidden = false;
+  const pending = D.documents.filter(spNeedsSync).length;
+  chip.innerHTML = spConnected()
+    ? `<button type="button" class="sp-chip on" id="spBtn" title="Conectado como ${esc(SP.account.username)}">${icon('cloud')}<span>SharePoint</span>${pending ? `<b class="sp-pend">${pending}</b>` : ''}</button>`
+    : `<button type="button" class="sp-chip off" id="spBtn">${icon('cloud')}<span>Conectar SharePoint</span></button>`;
+  $('#spBtn').onclick = e => { e.stopPropagation(); spMenu(e.currentTarget, pending); };
+  let b = $('#spBanner');
+  if (!spConnected()) {
+    if (!b) { b = document.createElement('div'); b.id = 'spBanner'; $('#banner').after(b); }
+    b.innerHTML = `<div class="banner sp-banner">${icon('cloud')}<span>Conecta tu cuenta de Microsoft para que los documentos se guarden y se lean desde SharePoint.</span><button type="button" class="btn sm" id="spBannerBtn">Conectar SharePoint</button></div>`;
+    $('#spBannerBtn').onclick = () => connectSharePoint({ rerender: !location.hash.startsWith('#upload') });
+  } else b?.remove();
+}
+function spMenu(btn, pending) {
+  if (!spConnected()) return connectSharePoint({ rerender: !location.hash.startsWith('#upload') });
+  openMenu(btn, [
+    { label: `Conectado como ${SP.account.username}`, ic: 'checkcircle', disabled: true },
+    { label: 'Abrir carpeta de aprobaciones', ic: 'cloud', act: async () => { try { const dr = await spDrive(); window.open(`${dr.webUrl}/${encPath(SPC.rootFolder)}`, '_blank', 'noopener'); } catch (e) { toast(e.message, 5000, 'error'); } } },
+    { label: pending ? `Sincronizar ahora (${pending} pendientes)` : 'Todo sincronizado', ic: 'refresh', disabled: !pending, act: spSyncAll },
+    '-',
+    { label: 'Desconectar cuenta de Microsoft', ic: 'logout', act: async () => { await spDisconnect(); renderSpState(); toast('Cuenta de Microsoft desconectada', 2500, 'info'); } },
+  ]);
+}
+async function connectSharePoint(o = {}) {
+  try {
+    await spConnect(); await spDrive();
+    toast('SharePoint conectado'); renderSpState(); await spSyncAll(); if (o.rerender !== false) render();
+  } catch (e) {
+    console.error(e);
+    if (/user_cancelled|popup_window_error|cancel/i.test(e.errorCode || e.message)) toast('No se completó el inicio de sesión con Microsoft. Si el navegador bloquea ventanas emergentes, permítelas para esta web.', 6000, 'error');
+    else uiAlert('No se pudo conectar con SharePoint: ' + e.message, { tone: 'danger', title: 'SharePoint' });
+    renderSpState();
+  }
 }
 
 /* ---------- Motor del visor PDF ---------- */
@@ -1221,7 +1567,7 @@ async function getLogo() { if (!logoBytes) { try { logoBytes = await (await fetc
 async function buildSignedPdf(d, v) {
   if (!window.PDFLib) throw new Error('No se ha podido cargar la librería PDF (¿sin conexión?).');
   const { PDFDocument, StandardFonts, rgb } = PDFLib;
-  const buf = await store.getFile(v.path); if (!buf) throw new Error('No se encuentra el archivo original.');
+  const { buf } = await getVersionBytes(v, { preferBackup: true });
   let pdf;
   if (/pdf/.test(v.fileType)) pdf = await PDFDocument.load(buf, { ignoreEncryption: true });
   else {
@@ -1417,17 +1763,36 @@ async function mountViewer(box, buf, type) {
   return () => { token++; if (url) URL.revokeObjectURL(url); if (pdf) pdf.destroy(); };
 }
 
-async function downloadSigned(d, v = latest(d)) {
+async function downloadSigned(d, v = latest(d), o = {}) {
   if (!d || !v) return;
-  if (verStatus(d, v) !== ST.APR) return uiAlert('El PDF firmado solo se puede descargar cuando todas las personas han firmado.', { title: 'Aún no disponible' });
+  if (circuitStatus(d, v) !== ST.APR) return uiAlert('El PDF firmado solo se puede descargar cuando todas las personas han firmado.', { title: 'Aún no disponible' });
+  if (SPC.enabled && !o.preview) {
+    if (!v.sp?.signed) {
+      if (!spConnected()) return uiAlert('El PDF firmado se descarga desde SharePoint. Conecta tu cuenta de Microsoft para continuar.', { title: 'Conecta SharePoint', ic: 'cloud' }).then(connectSharePoint);
+      toast('Guardando el PDF firmado en SharePoint…', 2000, 'info');
+      const r = await spSync(d.id);
+      if (!r.ok) return uiAlert('No se pudo guardar en SharePoint: ' + (r.error?.message || ''), { tone: 'danger', title: 'SharePoint' });
+      d = byId('documents', d.id); v = d.versions.find(x => x.n === v.n);
+    }
+    const f = v.sp.signed;
+    openDialog(dlgHead('PDF firmado en SharePoint', 'Se descarga desde SharePoint, con la etiqueta de privacidad de la empresa.') + `
+      <div class="filecard" style="margin-top:0"><span class="fi">${icon('filetext')}</span><div><b>${esc(f.name)}</b><small>${esc(spFolderLabel(f.folder))}</small></div>${icon('cloud', 'ok-ic')}</div>
+      <div class="dlg-foot"><button type="button" class="btn" id="pvw">${icon('eye')}Vista previa</button><span class="sep"></span><a class="btn" href="${esc(f.webUrl)}" target="_blank" rel="noopener">${icon('cloud')}Abrir en SharePoint</a>
+        <a class="btn primary" id="spDl" href="${esc(spDlUrl(f))}" target="_blank" rel="noopener">${icon('download')}Descargar</a></div>`, 'small');
+    $('#spDl').onclick = () => { addEvent(d.id, `PDF firmado descargado · V${v.n}`, 'Desde SharePoint'); setTimeout(() => $('#dlg').close(), 300); };
+    $('#pvw').onclick = () => downloadSigned(d, v, { preview: true });
+    return;
+  }
   try {
-    toast('Generando PDF firmado…', 1500);
+    toast('Generando PDF firmado…', 1500, 'info');
     const bytes = await buildSignedPdf(d, v);
     const name = `${safeName(d.code)}_V${v.n}_APROBADO.pdf`, blob = new Blob([bytes], { type: 'application/pdf' });
-    const dlg = openDialog(`<div class="dlg-h"><div class="min0"><h2>PDF firmado</h2><p><b>${esc(name)}</b> · portada con el cuadro de firmas + documento original</p></div>
-      <div class="page-actions"><button type="button" class="btn primary" id="pdfDl">${icon('download')}Descargar PDF</button><button type="button" class="icon-btn" data-x aria-label="Cerrar">${icon('x')}</button></div></div>
+    const spf = SPC.enabled && v.sp?.signed;
+    const dlg = openDialog(`<div class="dlg-h"><div class="min0"><h2>${spf ? 'Vista previa del PDF firmado' : 'PDF firmado'}</h2><p><b>${esc(name)}</b> · portada con el cuadro de firmas + documento original</p></div>
+      <div class="page-actions">${spf ? `<a class="btn primary" href="${esc(spDlUrl(spf))}" target="_blank" rel="noopener" id="pdfDl">${icon('download')}Descargar desde SharePoint</a>` : SPC.enabled ? '' : `<button type="button" class="btn primary" id="pdfDl">${icon('download')}Descargar PDF</button>`}<button type="button" class="icon-btn" data-x aria-label="Cerrar">${icon('x')}</button></div></div>
       <div id="pdfPrev"><div class="sk" style="height:50vh"></div></div>`, 'xl');
-    $('#pdfDl').onclick = async () => { download(blob, name); toast('PDF descargado'); await addEvent(d.id, `PDF firmado descargado · V${v.n}`); };
+    dlg.bindClose();
+    if ($('#pdfDl')) $('#pdfDl').onclick = async () => { if (!spf) { download(blob, name); toast('PDF descargado'); } await addEvent(d.id, `PDF firmado descargado · V${v.n}`, spf ? 'Desde SharePoint' : ''); };
     const stop = await mountViewer($('#pdfPrev'), bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), 'application/pdf');
     dlg.onclose = () => { if (stop) stop(); };
   } catch (e) { console.error(e); uiAlert('No se pudo generar el PDF: ' + e.message, { tone: 'danger', title: 'Error' }); }

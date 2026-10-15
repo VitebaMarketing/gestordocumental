@@ -100,10 +100,52 @@ Es adecuada para aprobaciones internas de diseño. No es una firma cualificada e
 index.html            Página
 styles.css            Estilos
 app.js                Lógica de la aplicación
-config.js             Configuración (Supabase)
+config.js             Configuración (Supabase y SharePoint)
+redirect.html         Página de retorno del inicio de sesión de Microsoft
 assets/               Logo e icono de Gafial Group
 supabase/schema.sql   Estructura de la base de datos
 .nojekyll             Necesario para GitHub Pages
 ```
 
 Librerías externas, cargadas desde CDN: pdf.js (visor), pdf-lib (generación del PDF firmado) y supabase-js.
+
+---
+
+## Conectar SharePoint (repositorio de documentos)
+
+Con SharePoint activado, los archivos se guardan y se leen desde vuestra biblioteca de SharePoint y se mueven solos entre carpetas según su estado:
+
+```
+Aprobaciones/
+├── En circuito/<Tipo de documento>/<Código>/      ← esperando firmas (y rechazados)
+├── Aprobados/<Tipo de documento>/<Código>/        ← PDF firmado con el cuadro de firmas
+│                                   └── Originales/  ← archivo original de esa versión
+└── Obsoletos/<Tipo de documento>/<Código>/        ← versiones sustituidas o marcadas como obsoletas
+                                    └── Originales/
+```
+
+- Al **subir** un documento → `En circuito`.
+- Al **aprobarse** (firma la última persona) → se genera el PDF firmado en `Aprobados` y el original pasa a `Aprobados/…/Originales`.
+- Al **subir una nueva versión** → la anterior pasa a **Obsoleto** y sus archivos a `Obsoletos`.
+- **Marcar como obsoleto / vigente** (menú *Acciones* del documento, cualquier usuario) → mueve los archivos a `Obsoletos` o los devuelve a su carpeta.
+- El botón **Descargar PDF firmado** descarga el archivo **desde SharePoint**, así la etiqueta de privacidad de la empresa se aplica en la descarga.
+
+Cada persona conecta su cuenta de Microsoft una vez (botón **Conectar SharePoint** arriba a la derecha). Las operaciones se hacen con sus propios permisos.
+Si en algún momento alguien firma sin tener la cuenta conectada, la firma se registra igualmente; los archivos se mueven en cuanto alguien con la cuenta conectada abre la plataforma.
+
+### Lo que tiene que hacer IT (una vez, ~10 minutos)
+
+1. **Microsoft Entra ID → Registros de aplicaciones → Nuevo registro**
+   - Nombre: `Circuito de firmas Gafial`
+   - Tipos de cuenta: *Solo cuentas de este directorio organizativo*
+   - URI de redirección → plataforma **Aplicación de página única (SPA)**:
+     `https://vitebamarketing.github.io/gestordocumental/redirect.html`
+2. **Permisos de API → Microsoft Graph → Permisos delegados**: `Sites.ReadWrite.All` (y `User.Read`, que viene por defecto) → **Conceder consentimiento de administrador**.
+3. Copiar el **Id. de aplicación (cliente)** y el **Id. de directorio (inquilino)** (no son secretos).
+4. En SharePoint: decidir el **sitio** y la **biblioteca**, y dar permiso de **edición** en esa biblioteca a las personas que suben o firman. Las personas externas (otro dominio) deben estar invitadas en vuestro Microsoft 365.
+
+Después, en `config.js` → bloque `sharepoint`: `enabled: true`, `tenantId`, `clientId`, `siteUrl` (p. ej. `https://viteba.sharepoint.com/sites/Diseno`) y `library` (vacío = «Documentos»). Los nombres de las carpetas también se cambian ahí.
+
+### Etiquetas de privacidad
+
+Si la etiqueta que aplica SharePoint **cifra** el PDF, la plataforma no podría abrirlo para mostrar la vista previa ni para generar la portada de firmas. Por eso `keepBackup: true` guarda además una copia interna (Supabase) que solo se usa si la copia de SharePoint no se puede leer. Las descargas siempre se hacen desde SharePoint.

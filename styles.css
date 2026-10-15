@@ -600,3 +600,19 @@ dialog.xl .vscroll { height: min(64vh, calc(100vh - 240px)); }
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 .sr { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* SharePoint */
+.sp-chip { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px; border-radius: 999px; font: 600 13px var(--font); cursor: pointer; border: 1px solid var(--border-2); background: var(--surface); color: var(--text); }
+.sp-chip .ic { width: 16px; height: 16px; }
+.sp-chip.on .ic { color: #0F6CBD; }
+.sp-chip.off { border-color: #F3DDB5; background: var(--warn-soft); color: var(--warn); }
+.sp-chip:hover { border-color: var(--faint); }
+.sp-pend { background: var(--warn); color: #fff; border-radius: 999px; font-size: 11px; min-width: 18px; height: 18px; display: inline-grid; place-items: center; padding: 0 5px; }
+.sp-banner { background: #EAF3FC; color: #0F4C81; border-bottom-color: #CFE2F6; }
+.sp-banner .btn { margin-left: auto; }
+.vsrc { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: #0F6CBD; margin-left: auto; padding: 0 8px; }
+.vsrc.backup { color: var(--muted); }
+.vsrc .ic { width: 14px; height: 14px; }
+.vsrc + .vinfo { margin-left: 0; }
+#spMeta a { color: inherit; }
+@media (max-width: 860px) { .sp-chip span { display: none; } .sp-chip { padding: 0 9px; } }
