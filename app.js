@@ -241,6 +241,7 @@ const D = Object.fromEntries(COLLS.map(c => [c, []]));
 async function refresh() {
   const res = await Promise.all(COLLS.map(c => store.all(c)));
   COLLS.forEach((c, i) => { D[c] = res[i]; });
+  D.documents = D.documents.filter(d => !d.deleted); // los eliminados se conservan en la base de datos, pero no se muestran
   ME = D.users.find(u => u.id === ME.id) || ME;
 }
 const byId = (coll, id) => D[coll].find(x => x.id === id);
@@ -726,6 +727,8 @@ function docMenu(btn, d, n) {
     n === latest(d).n
       ? (isObsolete(v) ? { label: 'Marcar como vigente', ic: 'rotate', act: () => setVigencia(d, false) } : { label: 'Marcar como obsoleto', ic: 'archive', act: () => setVigencia(d, true) })
       : { label: 'Versión obsoleta (hay una más reciente)', ic: 'archive', disabled: true },
+    '-',
+    { label: 'Eliminar documento', ic: 'trash', danger: true, act: () => deleteDocument(d) },
   ]);
 }
 
@@ -1265,6 +1268,40 @@ function changeCircuitDialog(d) {
     };
   };
   draw();
+}
+
+/* Elimina un documento: deja de aparecer en la plataforma y se cancelan sus firmas pendientes.
+   El registro se conserva marcado como eliminado (para auditoría) y sus archivos de SharePoint
+   van a la papelera de reciclaje del sitio, desde donde se pueden recuperar. */
+async function deleteDocument(d) {
+  const fresh = (await store.get('documents', d.id)) || d, v = latest(fresh), st = verStatus(fresh, v);
+  const pend = st === ST.INC ? pendingSigners(fresh) : [], apr = fresh.versions.filter(x => circuitStatus(fresh, x) === ST.APR).length;
+  const hasSp = SPC.enabled && fresh.versions.some(x => x.sp?.file || x.sp?.signed);
+  if (hasSp && !SP.account) {
+    if (!(await uiConfirm('Para eliminar también sus archivos de SharePoint tienes que conectar tu cuenta de Microsoft.', 'Conectar SharePoint', { title: 'Conecta SharePoint', ic: 'cloud' }))) return;
+    await connectSharePoint({ rerender: false }); if (!SP.account) return;
+  }
+  const msg = [`Se eliminará <b class="mono">${esc(fresh.code)}</b> · «${esc(v.title || fresh.title)}»${fresh.versions.length > 1 ? ` con sus ${fresh.versions.length} versiones` : ''}. Dejará de aparecer en Estado de documentos, en el inicio y en el histórico.`];
+  if (pend.length) msg.push(`<b>Se cancelará la firma pendiente</b> de ${esc(pend.map(slotName).join(', '))}: ya no se le pedirá.`);
+  if (apr) msg.push(`<b>Atención:</b> ${apr === 1 ? 'tiene una versión aprobada' : `tiene ${apr} versiones aprobadas`}; ${apr === 1 ? 'su PDF firmado dejará' : 'sus PDF firmados dejarán'} de estar disponible${apr === 1 ? '' : 's'} aquí.`);
+  if (hasSp) msg.push('Sus archivos de SharePoint irán a la papelera de reciclaje del sitio.');
+  const ok = await uiConfirm(msg.join('<br><br>'), 'Eliminar documento', { title: '¿Eliminar el documento?', tone: 'danger', ic: 'trash', html: true });
+  if (!ok) return;
+  if (hasSp) {
+    try {
+      const dr = await spDrive();
+      for (const x of fresh.versions) for (const f of [x.sp?.file, x.sp?.signed]) {
+        if (!f) continue;
+        try { await gfetch(`/drives/${dr.id}/items/${f.id}`, { method: 'DELETE' }); } catch (e) { if (e.status !== 404) throw e; }
+      }
+    } catch (e) { return uiAlert('No se pudieron eliminar los archivos de SharePoint: ' + e.message + ' El documento no se ha eliminado.', { tone: 'danger', title: 'Error' }); }
+  }
+  fresh.deleted = { at: now(), by: ME.id, status: st, cancelled: pendEmails(pend) };
+  try { await store.put('documents', fresh); } catch (e) { return uiAlert('No se pudo eliminar el documento: ' + e.message, { tone: 'danger', title: 'Error' }); }
+  await addEvent(fresh.id, 'Documento eliminado', pend.length ? `Firmas pendientes canceladas: ${pend.map(slotName).join(', ')}` : '');
+  D.documents = D.documents.filter(x => x.id !== fresh.id);
+  toast(pend.length ? 'Documento eliminado y firmas pendientes canceladas' : 'Documento eliminado', 3500);
+  if (location.hash.startsWith('#doc/')) location.hash = '#docs'; else render();
 }
 
 async function setVigencia(d, obsolete) {
@@ -1914,7 +1951,7 @@ function uiDialog(html, setup) {
   });
 }
 const toneIcon = { info: 'info', warn: 'alert', danger: 'alert' };
-const msgBlock = (msg, o) => `${o.title ? `<h2 style="font-size:17px;margin-bottom:10px">${esc(o.title)}</h2>` : ''}<div class="dlg-msg"><span class="ic-wrap ${o.tone || ''}">${icon(o.ic || toneIcon[o.tone] || 'info')}</span><p style="padding-top:8px">${esc(msg)}</p></div>`;
+const msgBlock = (msg, o) => `${o.title ? `<h2 style="font-size:17px;margin-bottom:10px">${esc(o.title)}</h2>` : ''}<div class="dlg-msg"><span class="ic-wrap ${o.tone || ''}">${icon(o.ic || toneIcon[o.tone] || 'info')}</span><p style="padding-top:8px">${o.html ? msg : esc(msg)}</p></div>`;
 const uiAlert = (msg, o = {}) => uiDialog(`${msgBlock(msg, o)}<div class="dlg-foot"><button type="button" class="btn primary" data-ok>Entendido</button></div>`,
   (d, done) => { $('[data-ok]', d).onclick = () => done(true); });
 const uiConfirm = (msg, ok = 'Confirmar', o = {}) => uiDialog(`${msgBlock(msg, o)}<div class="dlg-foot"><button type="button" class="btn" data-no>Cancelar</button><button type="button" class="btn ${o.tone === 'danger' ? 'danger-solid' : 'primary'}" data-ok>${esc(ok)}</button></div>`,
