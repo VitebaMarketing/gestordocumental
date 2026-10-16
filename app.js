@@ -249,7 +249,8 @@ const uname = e => userOf(e)?.name || e;
 const approvedList = () => D.documents.flatMap(d => d.versions.filter(v => verStatus(d, v) === ST.APR).map(v => ({ d, v, at: approvedAt(d, v) }))).sort((a, b) => b.at.localeCompare(a.at));
 const latest = d => d.versions[d.versions.length - 1];
 const productOf = d => D.products.find(p => p.code.toLowerCase() === d.code.toLowerCase());
-const sigsOf = (docId, n) => D.signatures.filter(s => s.docId === docId && s.v === n);
+const roundOf = (docId, n) => byId('documents', docId)?.versions.find(x => x.n === n)?.round || 0;
+const sigsOf = (docId, n) => { const r = roundOf(docId, n); return D.signatures.filter(s => s.docId === docId && s.v === n && (s.round || 0) === r); };
 /* Un paso del circuito es una persona { email, role } o un grupo { role, members: [emails] }:
    en un grupo basta con que firme UNA de las personas (p. ej. «Dirección - Executive»). */
 const isGroup = s => Array.isArray(s?.members);
@@ -259,6 +260,7 @@ const allSignerEmails = v => [...new Set(signerList(v).flatMap(slotEmails))];
 const pendEmails = rows => [...new Set(rows.flatMap(slotEmails))];
 const memberNames = s => s.members.map(e => uname(e)).join(' / ');
 const slotName = r => isGroup(r) ? `${r.role || 'Grupo'} (${memberNames(r)})` : uname(r.email);
+const snapSigners = c => signerList(c).map(s => isGroup(s) ? { role: s.role || 'Grupo', members: [...s.members] } : { email: s.email, role: s.role || userOf(s.email)?.role || '' });
 const slotRoleFor = (v, email) => signerList(v).find(s => slotEmails(s).includes(email))?.role || '';
 function signerRows(d, v) {
   const sigs = sigsOf(d.id, v.n);
@@ -426,7 +428,7 @@ function flowHtml(signers, order) {
   const list = signers.map(s => typeof s === 'string' ? { email: s, role: '' } : s);
   if (!list.length) return `<div class="alert a-warn">${icon('alert')}<div>Este circuito aún no tiene firmantes.</div></div>`;
   return `<ol class="flow ${order === 'seq' ? 'seq' : 'par'}">${list.map((s, i) => isGroup(s)
-    ? `<li>${order === 'seq' ? `<span class="f-n">${i + 1}</span>` : avStack(s.members, 3)}<span class="f-who"><b>${esc(s.role || 'Grupo')} <span class="gtag">${icon('users')}Firma 1 de ${s.members.length}</span></b><small>Puede firmar cualquiera: ${esc(memberNames(s))}</small></span></li>`
+    ? `<li class="grp">${order === 'seq' ? `<span class="f-n">${i + 1}</span>` : avStack(s.members, 3)}<span class="f-who"><b>${esc(s.role || 'Grupo')} <span class="gtag">${icon('users')}Firma 1 de ${s.members.length}</span></b><small>Puede firmar cualquiera: ${esc(memberNames(s))}</small></span></li>`
     : `<li>${order === 'seq' ? `<span class="f-n">${i + 1}</span>` : avatar(s.email)}<span class="f-who"><b>${esc(uname(s.email))}</b><small>${esc(s.role || userOf(s.email)?.role || 'Firmante')} · ${esc(s.email)}</small></span></li>`).join('')}</ol>`;
 }
 function hflow(c) {
@@ -715,6 +717,7 @@ function docMenu(btn, d, n) {
     { label: 'Copiar enlace', ic: 'link', act: async () => { const ok = await copyText(docLink(d)); toast(ok ? 'Enlace copiado' : 'No se pudo copiar el enlace', 2500, ok ? 'ok' : 'error'); } },
     ...(pend.length ? [{ label: 'Avisar a pendientes', ic: 'mail', act: () => shareDialog(d, false) }] : []),
     { label: 'Subir nueva versión', ic: 'refresh', act: () => { location.hash = '#upload/' + d.id; } },
+    ...(n === latest(d).n && !isObsolete(v) ? [{ label: 'Cambiar circuito / reiniciar firmas', ic: 'workflow', act: () => changeCircuitDialog(d) }] : []),
     '-',
     { label: 'Descargar PDF firmado', ic: 'download', disabled: !apr, title: apr ? '' : 'Disponible cuando hayan firmado todas las personas', act: () => downloadSigned(d, v) },
     ...(apr ? [{ label: 'Vista previa del PDF firmado', ic: 'eye', act: () => downloadSigned(d, v, { preview: true }) }] : []),
@@ -1074,7 +1077,7 @@ function viewUpload(m, fromId) {
       let obsoleted = false;
       if (prev && !isObsolete(prev)) { prev.obsolete = { at: now(), by: ME.id, reason: `Nueva versión V${n}` }; obsoleted = true; }
       doc.versions.push({ n, fileName: file.name, fileType: type, path, hash, size: file.size, uploadedBy: ME.id, uploadedAt: now(),
-        title, note: w.note.trim(), signers: signerList(c).map(s => isGroup(s) ? { role: s.role || 'Grupo', members: [...s.members] } : { email: s.email, role: s.role || userOf(s.email)?.role || '' }), order: c.order || 'any', circuitName: c.name });
+        title, note: w.note.trim(), signers: snapSigners(c), order: c.order || 'any', circuitName: c.name });
       doc.title = title; doc.docTypeId = dt.id;
       await store.put('documents', doc);
       if (!D.products.some(p => p.code.toLowerCase() === code.toLowerCase()))
@@ -1224,6 +1227,46 @@ function viewDoc(m, id) {
   if (spConnected() && spNeedsSync(d) && !SP.busy.has(d.id)) spSyncReport(d.id, true).then(r => { if (r?.log?.length && location.hash === '#doc/' + d.id) render(); });
 }
 
+/* Cambia el circuito de la última versión. Si ya hay firmas, se anulan (quedan en el historial)
+   y el circuito empieza de cero con las personas del circuito elegido. */
+function changeCircuitDialog(d) {
+  const v = latest(d), done = signerRows(d, v).filter(r => r.sig), wasApr = circuitStatus(d, v) === ST.APR;
+  let pick = d.circuitId;
+  const dlg = openDialog('', 'wide');
+  const draw = () => {
+    const c = byId('circuits', pick), same = pick === d.circuitId;
+    const clash = D.documents.find(x => x.id !== d.id && x.circuitId === pick && x.code.toLowerCase() === d.code.toLowerCase());
+    dlg.body.innerHTML = dlgHead('Cambiar circuito de firma', `${esc(d.code)} · V${v.n} · circuito actual: <b>${esc(v.circuitName || byId('circuits', d.circuitId)?.name || '—')}</b>`) + `
+      <div class="circ-pick" role="radiogroup" aria-label="Circuito de firma">${D.circuits.map(x => `<label class="pick ${x.id === pick ? 'on' : ''}"><input type="radio" name="ccirc" value="${esc(x.id)}" ${x.id === pick ? 'checked' : ''}>
+        <span class="pick-b"><b>${esc(x.name)}${x.id === d.circuitId ? ' <span class="muted" style="font-weight:400">(actual)</span>' : ''}</b>${x.description ? `<small>${esc(x.description)}</small>` : ''}<span class="pick-m">${modeChip(x)}${avStack(allSignerEmails(x))}</span></span></label>`).join('')}</div>
+      ${c ? `<div class="card" style="margin:16px 0 0;background:var(--surface-2)"><div class="card-h"><h2>Firmarán · ${esc(c.name)}</h2></div><p class="muted" style="font-size:13px">${modeChip(c)} — ${modeText(c.order)}</p>${flowHtml(signerList(c), c.order)}</div>` : ''}
+      ${clash ? `<div class="alert a-danger" style="margin:16px 0 0">${icon('alert')}<div>Ya existe <b class="mono">${esc(d.code)}</b> en el circuito «${esc(c.name)}». Sube allí una versión nueva en lugar de cambiar este documento.</div></div>`
+        : `<div class="alert ${done.length ? 'a-warn' : 'a-info'}" style="margin:16px 0 0">${icon(done.length ? 'alert' : 'workflow')}<div>${done.length
+          ? `<b>El circuito se reiniciará.</b> ${done.length === 1 ? 'Se anulará la firma ya hecha' : `Se anularán las ${done.length} firmas ya hechas`} (${esc(done.map(r => uname(r.sig.email)).join(', '))}) y todas las personas del circuito tendrán que firmar de nuevo.${wasApr ? ' El documento dejará de estar <b>Aprobado</b> y su PDF firmado quedará anulado.' : ''} Las firmas anuladas se conservan en el historial.`
+          : same ? 'Se aplicará la configuración actual del circuito (útil si lo has editado después de subir el documento).' : 'Aún no hay firmas: el documento pasa al nuevo circuito sin perder nada.'}</div></div>`}
+      <div class="dlg-foot"><button type="button" class="btn" data-x>Cancelar</button><button type="button" class="btn ${done.length ? 'danger' : 'primary'}" id="ccSave" ${clash || !c ? 'disabled' : ''}>${icon(done.length ? 'rotate' : 'check')}${done.length ? 'Cambiar y reiniciar firmas' : same ? 'Aplicar circuito' : 'Cambiar circuito'}</button></div>`;
+    dlg.bindClose();
+    $$('input[name=ccirc]', dlg.body).forEach(r => { r.onchange = () => { pick = r.value; draw(); }; });
+    $('#ccSave').onclick = async () => {
+      const b = $('#ccSave'); b.classList.add('busy');
+      const fresh = (await store.get('documents', d.id)) || d, fv = latest(fresh);
+      if (fv.n !== v.n) { dlg.close(); uiAlert('Se ha subido una versión nueva mientras tanto. Revisa el documento de nuevo.'); return render(); }
+      const nDone = signerRows(fresh, fv).filter(r => r.sig).length, from = fv.circuitName || byId('circuits', fresh.circuitId)?.name || '—';
+      fresh.circuitId = c.id;
+      Object.assign(fv, { signers: snapSigners(c), order: c.order || 'any', circuitName: c.name });
+      if (nDone) fv.round = (fv.round || 0) + 1;
+      fv.resets = [...(fv.resets || []), { at: now(), by: ME.id, from, to: c.name, voided: nDone }];
+      try { await store.put('documents', fresh); } catch (e) { b.classList.remove('busy'); return uiAlert('No se pudo cambiar el circuito: ' + e.message, { tone: 'danger', title: 'Error' }); }
+      const i = D.documents.findIndex(x => x.id === d.id); if (i >= 0) D.documents[i] = fresh;
+      await addEvent(d.id, nDone ? `Circuito reiniciado · V${fv.n}` : `Circuito cambiado · V${fv.n}`, `${from} → ${c.name}${nDone ? ` · ${nDone} ${nDone === 1 ? 'firma anulada' : 'firmas anuladas'}` : ''}`);
+      dlg.close(); toast(nDone ? 'Circuito reiniciado: todas las personas deben firmar de nuevo' : 'Circuito cambiado', 3500);
+      await spSyncReport(d.id, true);
+      render(); setTimeout(() => shareDialog(fresh, false), 50);
+    };
+  };
+  draw();
+}
+
 async function setVigencia(d, obsolete) {
   const fresh = (await store.get('documents', d.id)) || d, v = latest(fresh);
   const inCirc = circuitStatus(fresh, v) === ST.INC;
@@ -1247,7 +1290,8 @@ async function doSign(d, decision, comment) {
   if (v.n !== latest(d).n) { uiAlert('Se ha subido una versión nueva mientras revisabas. Se mostrará la última.'); return render(); }
   if (!canSign(fresh, ME.id)) { uiAlert('Este documento ya no está pendiente de tu firma.'); return render(); }
   const slot = signerRows(fresh, v).find(r => !r.sig && slotEmails(r).includes(ME.id));
-  const s = { id: `${d.id}|${v.n}|${ME.id}`, docId: d.id, v: v.n, email: ME.id, name: ME.name || ME.id, role: slot?.role || '', slot: slot ? slot.i : null,
+  const round = v.round || 0;
+  const s = { id: `${d.id}|${v.n}|${ME.id}${round ? '|r' + round : ''}`, docId: d.id, v: v.n, round, email: ME.id, name: ME.name || ME.id, role: slot?.role || '', slot: slot ? slot.i : null,
     decision, comment, signature: decision === 'OK' ? ME.signature : null, at: now() };
   try { await store.add('signatures', s); } catch (e) { uiAlert('No se pudo registrar la firma: ' + e.message, { tone: 'danger', title: 'Error' }); return render(); }
   D.signatures.push(s);
@@ -1457,6 +1501,7 @@ function spName(d, v, kind) {
   const m = /^(.*?)(\.[^.]+)?$/.exec(v.fileName || 'documento');
   return spSafe(`${d.code}_V${v.n}_${m[1]}`) + (m[2] || '').toLowerCase();
 }
+const spVoidFolder = d => [SPC.folders.obsolete, byId('doctypes', d.docTypeId)?.name || 'Sin tipo', d.code].filter(Boolean).map(spSafe).join('/');
 const spFolderLabel = f => !f ? '' : f.split('/').join(' › ');
 function spNeedsSync(d) {
   if (!SPC.enabled) return false;
@@ -1465,7 +1510,7 @@ function spNeedsSync(d) {
     if (!sp.file) return !!v.path;
     if (sp.file.folder !== spFolder(d, v, 'original')) return true;
     if (circuitStatus(d, v) === ST.APR) return !sp.signed || sp.signed.folder !== spFolder(d, v, 'signed');
-    return false;
+    return !!sp.signed;
   });
 }
 /* Lleva los archivos de un documento a su carpeta. Es idempotente: se puede repetir sin riesgo. */
@@ -1496,6 +1541,11 @@ async function spSync(docId, opts = {}) {
           const bytes = await buildSignedPdf(d, v);
           v.sp.signed = await spUpload(sf, sn, bytes, 'application/pdf'); log.push(`V${v.n}: PDF firmado guardado en ${spFolderLabel(sf)}`);
         }
+      } else if (v.sp.signed) {
+        const vf = spVoidFolder(d), vn = spSafe(`${d.code}_V${v.n}_ANULADO_${now().slice(0, 10)}`) + '.pdf';
+        const moved = await spMove(v.sp.signed, vf, vn);
+        v.sp.voided = [...(v.sp.voided || []), moved || v.sp.signed]; v.sp.signed = null;
+        log.push(`V${v.n}: PDF firmado anulado${moved ? ' y movido a ' + spFolderLabel(vf) : ''}`);
       }
     }
     if (log.length) {

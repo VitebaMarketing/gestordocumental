@@ -634,3 +634,6 @@ dialog.xl .vscroll { height: min(64vh, calc(100vh - 240px)); }
   .slist li.grp .who-b { order: 4; flex-basis: 100%; }
   .slist li.grp .who-b b, .slist li.grp .who-b small { white-space: normal; }
 }
+.flow.par li.grp { grid-column: span 2; }
+.flow li.grp .f-who b { white-space: normal; }
+@media (max-width: 520px) { .flow.par li.grp { grid-column: auto; } }
