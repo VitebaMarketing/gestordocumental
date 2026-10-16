@@ -171,7 +171,7 @@ const SEED = {
     { id: 'c-aaff', name: 'Aprobación de diseños AAFF', description: 'Revisión y OK de artes finales', order: 'any',
       signers: [{ email: 'respinosa@viteba.com', role: 'Graphic designer' }, { email: 'aheredia@viteba.com', role: 'Product' }] },
     { id: 'c-dir', name: 'Aprobación de Dirección', description: 'OK final de Dirección', order: 'any',
-      signers: [{ email: 'amanas@viteba.com', role: 'Executives' }, { email: 'cbianchi@viteba.com', role: 'Executives' }, { email: 'ggalimberti@doribac.com', role: 'CEO' }] },
+      signers: [{ role: 'Dirección - Executive', members: ['ggalimberti@doribac.com', 'cbianchi@viteba.com', 'amanas@viteba.com'] }] },
   ],
 };
 async function seedIfEmpty() {
@@ -225,7 +225,7 @@ async function seedDemo() {
     await store.add('events', { id: uid(), docId: id, at: iso(upAgo), email: uploader, action: 'Subida V1', detail: 'ejemplo.pdf · circuito ' + c.name });
     for (const [email, ago] of signs) {
       const u = await store.get('users', email);
-      await store.add('signatures', { id: `${id}|1|${email}`, docId: id, v: 1, email, name: u.name, role: signerList(c).find(s => s.email === email)?.role || '', decision: 'OK', comment: '', signature: u.signature, at: iso(ago) });
+      await store.add('signatures', { id: `${id}|1|${email}`, docId: id, v: 1, email, name: u.name, role: slotRoleFor(c, email), decision: 'OK', comment: '', signature: u.signature, at: iso(ago) });
       await store.add('events', { id: uid(), docId: id, at: iso(ago), email, action: 'Firmado OK · V1', detail: '' });
     }
   };
@@ -250,10 +250,23 @@ const approvedList = () => D.documents.flatMap(d => d.versions.filter(v => verSt
 const latest = d => d.versions[d.versions.length - 1];
 const productOf = d => D.products.find(p => p.code.toLowerCase() === d.code.toLowerCase());
 const sigsOf = (docId, n) => D.signatures.filter(s => s.docId === docId && s.v === n);
-const signerList = v => v.signers.map(s => typeof s === 'string' ? { email: s, role: '' } : s);
+/* Un paso del circuito es una persona { email, role } o un grupo { role, members: [emails] }:
+   en un grupo basta con que firme UNA de las personas (p. ej. «Dirección - Executive»). */
+const isGroup = s => Array.isArray(s?.members);
+const slotEmails = s => isGroup(s) ? s.members : [s.email];
+const signerList = v => (v.signers || []).map(s => typeof s === 'string' ? { email: s, role: '' } : s);
+const allSignerEmails = v => [...new Set(signerList(v).flatMap(slotEmails))];
+const pendEmails = rows => [...new Set(rows.flatMap(slotEmails))];
+const memberNames = s => s.members.map(e => uname(e)).join(' / ');
+const slotName = r => isGroup(r) ? `${r.role || 'Grupo'} (${memberNames(r)})` : uname(r.email);
+const slotRoleFor = (v, email) => signerList(v).find(s => slotEmails(s).includes(email))?.role || '';
 function signerRows(d, v) {
   const sigs = sigsOf(d.id, v.n);
-  return signerList(v).map((s, i) => ({ ...s, i, sig: sigs.find(x => x.email === s.email) }));
+  return signerList(v).map((s, i) => {
+    if (!isGroup(s)) return { ...s, i, sig: sigs.find(x => x.email === s.email) };
+    const sig = sigs.find(x => x.slot === i && s.members.includes(x.email)) || sigs.find(x => x.slot == null && s.members.includes(x.email));
+    return { ...s, i, group: true, sig, email: sig?.email || '' };
+  });
 }
 const isObsolete = v => !!(v && (v.obsolete || v.superseded));
 function verStatus(d, v) {
@@ -269,8 +282,9 @@ function circuitStatus(d, v) {
 const docStatus = d => verStatus(d, latest(d));
 function canSign(d, email) {
   const v = latest(d); if (verStatus(d, v) !== ST.INC) return false;
-  const rows = signerRows(d, v); const me = rows.find(r => r.email === email);
-  if (!me || me.sig) return false;
+  if (sigsOf(d.id, v.n).some(x => x.email === email)) return false;
+  const rows = signerRows(d, v); const me = rows.find(r => !r.sig && slotEmails(r).includes(email));
+  if (!me) return false;
   return v.order !== 'seq' || rows.slice(0, me.i).every(r => r.sig?.decision === 'OK');
 }
 function pendingSigners(d) {
@@ -411,12 +425,16 @@ const pageHead = (title, sub, actions = '') => `<div class="page-h"><div class="
 function flowHtml(signers, order) {
   const list = signers.map(s => typeof s === 'string' ? { email: s, role: '' } : s);
   if (!list.length) return `<div class="alert a-warn">${icon('alert')}<div>Este circuito aún no tiene firmantes.</div></div>`;
-  return `<ol class="flow ${order === 'seq' ? 'seq' : 'par'}">${list.map((s, i) => `<li>${order === 'seq' ? `<span class="f-n">${i + 1}</span>` : avatar(s.email)}<span class="f-who"><b>${esc(uname(s.email))}</b><small>${esc(s.role || userOf(s.email)?.role || 'Firmante')} · ${esc(s.email)}</small></span></li>`).join('')}</ol>`;
+  return `<ol class="flow ${order === 'seq' ? 'seq' : 'par'}">${list.map((s, i) => isGroup(s)
+    ? `<li>${order === 'seq' ? `<span class="f-n">${i + 1}</span>` : avStack(s.members, 3)}<span class="f-who"><b>${esc(s.role || 'Grupo')} <span class="gtag">${icon('users')}Firma 1 de ${s.members.length}</span></b><small>Puede firmar cualquiera: ${esc(memberNames(s))}</small></span></li>`
+    : `<li>${order === 'seq' ? `<span class="f-n">${i + 1}</span>` : avatar(s.email)}<span class="f-who"><b>${esc(uname(s.email))}</b><small>${esc(s.role || userOf(s.email)?.role || 'Firmante')} · ${esc(s.email)}</small></span></li>`).join('')}</ol>`;
 }
 function hflow(c) {
   const list = signerList(c);
   if (!list.length) return `<div class="alert a-warn">${icon('alert')}<div>Sin firmantes: añade al menos una persona.</div></div>`;
-  const node = (s, i) => `<div class="node">${c.order === 'seq' ? `<span class="f-n" style="width:28px;height:28px;border-radius:50%;background:var(--primary-soft);color:var(--primary);display:grid;place-items:center;font-weight:700;font-size:12px">${i + 1}</span>` : avatar(s.email, 'sm')}<span><b>${esc(uname(s.email))}</b><small>${esc(s.role || 'Firmante')}</small></span></div>`;
+  const node = (s, i) => `<div class="node">${c.order === 'seq' ? `<span class="f-n" style="width:28px;height:28px;border-radius:50%;background:var(--primary-soft);color:var(--primary);display:grid;place-items:center;font-weight:700;font-size:12px">${i + 1}</span>` : isGroup(s) ? avStack(s.members, 3) : avatar(s.email, 'sm')}<span>${isGroup(s)
+    ? `<b>${esc(s.role || 'Grupo')}</b><small>Cualquiera de ${s.members.length}: ${esc(memberNames(s))}</small>`
+    : `<b>${esc(uname(s.email))}</b><small>${esc(s.role || 'Firmante')}</small>`}</span></div>`;
   return c.order === 'seq'
     ? `<div class="hflow">${list.map((s, i) => node(s, i) + (i < list.length - 1 ? `<span class="arrow">${icon('arrowright')}</span>` : '')).join('')}</div>`
     : `<div class="hflow"><div class="group"><span class="group-l">En paralelo</span>${list.map(node).join('')}</div></div>`;
@@ -728,7 +746,7 @@ function pendingTable(list) {
 function approvedTable(items) {
   return `<div class="tablewrap"><table class="tbl"><thead><tr><th>Documento</th><th>Tipo</th><th>Participantes</th><th>Aprobado</th><th>Vigencia</th><th class="act"></th></tr></thead><tbody>
     ${items.map(({ d, v, at }) => `<tr data-href="#doc/${d.id}" tabindex="0"><td>${docCell(d, v)}</td><td>${esc(byId('doctypes', d.docTypeId)?.name || '—')}</td>
-      <td>${avStack(signerList(v).map(s => s.email))}</td><td class="nowrap">${fmtDay(at)}<small>${fmtTime(at).slice(0, 5)}</small></td><td>${vigBadge(d, v)}</td>
+      <td>${avStack(allSignerEmails(v))}</td><td class="nowrap">${fmtDay(at)}<small>${fmtTime(at).slice(0, 5)}</small></td><td>${vigBadge(d, v)}</td>
       <td class="act">${dlBtn(d, v)}</td></tr>`).join('')}</tbody></table></div>`;
 }
 function eventInfo(e) {
@@ -773,7 +791,7 @@ function viewHome(m) {
       ${mine.length ? pendingTable(mine.slice(0, 5)) : emptyState('inbox', 'No tienes documentos pendientes de firmar', 'Cuando alguien te incluya en un circuito de firma, aparecerá aquí.', '', true)}</section>
     <div class="grid-2">
       <section class="card"><div class="card-h"><h2>Documentos en curso</h2>${inCirc.length ? `<a class="lnk" href="#docs/circuito">Ver todos ${icon('arrowright')}</a>` : ''}</div>
-        ${inCirc.length ? `<ul class="plist">${inCirc.slice(0, 5).map(d => { const p = pendingSigners(d); return `<li><a href="#doc/${d.id}">${docCell(d)}${sbadge(docLabel(d))}<span class="pl-sub">${progress(d)}<span class="min0">Falta: ${esc(p.map(x => uname(x.email)).join(', ') || '—')}</span></span></a></li>`; }).join('')}</ul>`
+        ${inCirc.length ? `<ul class="plist">${inCirc.slice(0, 5).map(d => { const p = pendingSigners(d); return `<li><a href="#doc/${d.id}">${docCell(d)}${sbadge(docLabel(d))}<span class="pl-sub">${progress(d)}<span class="min0">Falta: ${esc(p.map(slotName).join(', ') || '—')}</span></span></a></li>`; }).join('')}</ul>`
           : emptyState('clock', 'Nada en circuito', 'Los documentos enviados a firma aparecen aquí hasta que se aprueban.', '', true)}</section>
       <section class="card"><div class="card-h"><h2>Actividad reciente</h2></div>
         ${events.length ? `<ul class="feed">${events.map(feedItem).join('')}</ul>` : emptyState('activity', 'Sin actividad todavía', 'Aquí verás subidas, firmas y aprobaciones.', '', true)}</section>
@@ -826,7 +844,7 @@ function listPage(m, cfg) {
       if (s.circ && d.circuitId !== s.circ) return false;
       if (q) {
         const p = productOf(d);
-        const hay = [d.code, d.title, v.title, v.fileName, p?.name, p?.description, ...signerList(v).map(x => uname(x.email) + ' ' + x.email), uname(v.uploadedBy)].join(' ').toLowerCase();
+        const hay = [d.code, d.title, v.title, v.fileName, p?.name, p?.description, ...allSignerEmails(v).map(e => uname(e) + ' ' + e), ...signerList(v).map(x => x.role || ''), uname(v.uploadedBy)].join(' ').toLowerCase();
         if (!hay.includes(q)) return false;
       }
       if (s.d1 || s.d2) { const day = localDay(cfg.approved ? it.at : v.uploadedAt); if (s.d1 && day < s.d1) return false; if (s.d2 && day > s.d2) return false; }
@@ -850,7 +868,7 @@ function listPage(m, cfg) {
       const { d, v } = it; const dt = esc(byId('doctypes', d.docTypeId)?.name || '—');
       return cfg.approved
         ? `<tr data-href="#doc/${d.id}" tabindex="0"><td>${docCell(d, v)}</td><td>${dt}</td><td><span class="ver">V${v.n}</span>${v.n !== latest(d).n ? `<small>vigente: V${latest(d).n}</small>` : ''}</td>
-           <td>${avStack(signerList(v).map(x => x.email))}</td><td class="nowrap">${fmtDay(it.at)}<small>${fmtTime(it.at).slice(0, 5)}</small></td><td>${vigBadge(d, v)}</td>
+           <td>${avStack(allSignerEmails(v))}</td><td class="nowrap">${fmtDay(it.at)}<small>${fmtTime(it.at).slice(0, 5)}</small></td><td>${vigBadge(d, v)}</td>
            <td class="act">${dlBtn(d, v)}<button class="icon-btn sm" data-menu="${d.id}|${v.n}" aria-label="Más acciones">${icon('more')}</button></td></tr>`
         : `<tr data-href="#doc/${d.id}" tabindex="0"><td>${docCell(d, v)}</td><td>${dt}</td><td>${who(v.uploadedBy)}</td><td class="nowrap">${fmtDay(v.uploadedAt)}<small>${fmtTime(v.uploadedAt).slice(0, 5)}</small></td>
            <td>${progress(d, v)}</td><td>${sbadge(docLabel(d, v))}</td><td class="act"><button class="icon-btn sm" data-menu="${d.id}|${v.n}" aria-label="Acciones de ${esc(d.code)}">${icon('more')}</button></td></tr>`;
@@ -986,7 +1004,7 @@ function viewUpload(m, fromId) {
     3() {
       const c = circuit(), vi = verInfo();
       body.innerHTML = `<div class="circ-pick" role="radiogroup" aria-label="Circuito de firma">${D.circuits.map(x => `<label class="pick ${x.id === w.circuitId ? 'on' : ''}"><input type="radio" name="circ" value="${esc(x.id)}" ${x.id === w.circuitId ? 'checked' : ''}>
-          <span class="pick-b"><b>${esc(x.name)}</b>${x.description ? `<small>${esc(x.description)}</small>` : ''}<span class="pick-m">${modeChip(x)}${avStack(signerList(x).map(s => s.email))}</span></span></label>`).join('')}
+          <span class="pick-b"><b>${esc(x.name)}</b>${x.description ? `<small>${esc(x.description)}</small>` : ''}<span class="pick-m">${modeChip(x)}${avStack(allSignerEmails(x))}</span></span></label>`).join('')}
         <button type="button" class="pick add" id="newCirc">${icon('plus')}<span>Crear circuito</span></button></div>
         ${c ? `<div class="card" style="margin:0;background:var(--surface-2)"><div class="card-h"><h2>Participantes · ${esc(c.name)}</h2><button type="button" class="btn sm" id="editCirc">${icon('pencil')}Editar circuito</button></div>
           <p class="muted" style="font-size:13px">${modeChip(c)} — ${modeText(c.order)}</p>${flowHtml(signerList(c), c.order)}</div>
@@ -1056,7 +1074,7 @@ function viewUpload(m, fromId) {
       let obsoleted = false;
       if (prev && !isObsolete(prev)) { prev.obsolete = { at: now(), by: ME.id, reason: `Nueva versión V${n}` }; obsoleted = true; }
       doc.versions.push({ n, fileName: file.name, fileType: type, path, hash, size: file.size, uploadedBy: ME.id, uploadedAt: now(),
-        title, note: w.note.trim(), signers: signerList(c).map(s => ({ email: s.email, role: s.role || userOf(s.email)?.role || '' })), order: c.order || 'any', circuitName: c.name });
+        title, note: w.note.trim(), signers: signerList(c).map(s => isGroup(s) ? { role: s.role || 'Grupo', members: [...s.members] } : { email: s.email, role: s.role || userOf(s.email)?.role || '' }), order: c.order || 'any', circuitName: c.name });
       doc.title = title; doc.docTypeId = dt.id;
       await store.put('documents', doc);
       if (!D.products.some(p => p.code.toLowerCase() === code.toLowerCase()))
@@ -1084,7 +1102,7 @@ function viewDoc(m, id) {
   const v = latest(d), st = verStatus(d, v), rows = signerRows(d, v), ok = rows.filter(r => r.sig?.decision === 'OK').length;
   const dt = byId('doctypes', d.docTypeId), c = byId('circuits', d.circuitId), p = productOf(d), cat = p && byId('prodcats', p.categoryId);
   const mine = canSign(d, ME.id), pend = pendingSigners(d), label = docLabel(d);
-  const meRow = rows.find(r => r.email === ME.id);
+  const meRow = rows.find(r => slotEmails(r).includes(ME.id));
   const rowState = r => r.sig ? (r.sig.decision === 'OK' ? 'Firmado' : 'Rechazado') : st !== ST.INC ? '—'
     : (v.order === 'seq' && !rows.slice(0, r.i).every(x => x.sig?.decision === 'OK') ? 'Esperando turno' : 'Pendiente');
   const events = D.events.filter(e => e.docId === d.id).sort((a, b) => b.at.localeCompare(a.at));
@@ -1098,15 +1116,16 @@ function viewDoc(m, id) {
       <div class="mysig">${ME.signature ? `<img src="${ME.signature}" alt="Tu firma">` : `<span class="muted">${icon('alert', 'ic-warn')} Aún no tienes firma registrada</span>`}<button type="button" class="linkbtn" id="editSig">${ME.signature ? 'Cambiar' : 'Crear firma'}</button></div>
       <label class="fld">Comentario <span class="muted" style="font-weight:400">(obligatorio si rechazas)</span><textarea id="cmt" rows="2" placeholder="Opcional al firmar"></textarea></label>
       <div class="sign-actions"><button type="button" class="btn danger" id="signKo">${icon('x')}Rechazar</button><button type="button" class="btn primary" id="signOk">${icon('pen')}Firmar documento</button></div></section>`;
-  else if (st === ST.INC && meRow && !meRow.sig) actionBox = `<div class="alert a-info">${icon('hourglass')}<div><b>Aún no es tu turno.</b> Podrás firmar cuando firme ${esc(pend.map(x => uname(x.email)).join(', '))}.</div></div>`;
+  else if (st === ST.INC && meRow && !meRow.sig) actionBox = `<div class="alert a-info">${icon('hourglass')}<div><b>Aún no es tu turno.</b> Podrás firmar cuando firme ${esc(pend.map(slotName).join(', '))}.</div></div>`;
   else if (st === ST.APR) actionBox = `<div class="alert a-ok">${icon('checkcircle')}<div><b>Documento aprobado</b> el ${fmtDT(approvedAt(d, v))} por todas las personas del circuito.</div></div>`;
   else if (st === ST.REJ) actionBox = `<div class="alert a-danger">${icon('xcircle')}<div><b>Rechazado por ${esc(uname(rejSig?.email))}</b> el ${fmtDT(rejSig?.at)}.${rejSig?.comment ? `<br>«${esc(rejSig.comment)}»` : ''}<div style="margin-top:8px"><a class="btn sm" href="#upload/${d.id}">${icon('refresh')}Subir versión corregida</a></div></div></div>`;
-  else if (st === ST.INC) actionBox = `<div class="alert a-info">${icon('clock')}<div><b>Esperando firmas</b> de ${esc(pend.map(x => uname(x.email)).join(', '))}.<div style="margin-top:8px"><button type="button" class="btn sm" id="notify">${icon('mail')}Avisar a pendientes</button></div></div></div>`;
+  else if (st === ST.INC) actionBox = `<div class="alert a-info">${icon('clock')}<div><b>Esperando firmas</b> de ${esc(pend.map(slotName).join(', '))}.<div style="margin-top:8px"><button type="button" class="btn sm" id="notify">${icon('mail')}Avisar a pendientes</button></div></div></div>`;
 
   const flow = `<ol class="sf">${rows.map(r => { const s = rowState(r), cls = s === 'Firmado' ? 'done' : s === 'Rechazado' ? 'ko' : s === 'Pendiente' ? 'now' : '';
-    return `<li class="${cls} ${r.email === ME.id && s === 'Pendiente' ? 'me' : ''}"><span class="sf-n">${s === 'Firmado' ? icon('check') : s === 'Rechazado' ? icon('x') : r.i + 1}</span>
-      <div class="sf-b"><div class="sf-top"><b>${esc(uname(r.email))}${r.email === ME.id ? ' <span class="muted" style="font-weight:400">(tú)</span>' : ''}</b>${sbadge(s)}</div>
-      <small>${esc(r.role || 'Firmante')}</small>
+    const nm = r.group && !r.sig ? (r.role || 'Grupo') : uname(r.email), mine = r.email === ME.id || (r.group && !r.sig && r.members.includes(ME.id));
+    return `<li class="${cls} ${mine && s === 'Pendiente' ? 'me' : ''}"><span class="sf-n">${s === 'Firmado' ? icon('check') : s === 'Rechazado' ? icon('x') : r.i + 1}</span>
+      <div class="sf-b"><div class="sf-top"><b>${esc(nm)}${r.email === ME.id ? ' <span class="muted" style="font-weight:400">(tú)</span>' : ''}</b>${sbadge(s)}</div>
+      <small>${r.group ? `${r.sig ? esc(r.role || 'Grupo') + ' · ' : ''}${icon('users', 'ic-xs')} Firma cualquiera de: ${esc(memberNames(r))}${!r.sig && r.members.includes(ME.id) ? ' (tú incluido)' : ''}` : esc(r.role || 'Firmante')}</small>
       ${r.sig ? `<small>${r.sig.decision === 'OK' ? 'Firmado' : 'Rechazado'} el ${fmtDT(r.sig.at)}</small>` : ''}
       ${r.sig?.signature ? `<img class="sf-sig" src="${r.sig.signature}" alt="Firma de ${esc(uname(r.email))}">` : ''}
       ${r.sig?.comment ? `<div class="sf-cmt">«${esc(r.sig.comment)}»</div>` : ''}</div></li>`; }).join('')}</ol>`;
@@ -1227,7 +1246,8 @@ async function doSign(d, decision, comment) {
   const v = latest(fresh);
   if (v.n !== latest(d).n) { uiAlert('Se ha subido una versión nueva mientras revisabas. Se mostrará la última.'); return render(); }
   if (!canSign(fresh, ME.id)) { uiAlert('Este documento ya no está pendiente de tu firma.'); return render(); }
-  const s = { id: `${d.id}|${v.n}|${ME.id}`, docId: d.id, v: v.n, email: ME.id, name: ME.name || ME.id, role: signerList(v).find(x => x.email === ME.id)?.role || '',
+  const slot = signerRows(fresh, v).find(r => !r.sig && slotEmails(r).includes(ME.id));
+  const s = { id: `${d.id}|${v.n}|${ME.id}`, docId: d.id, v: v.n, email: ME.id, name: ME.name || ME.id, role: slot?.role || '', slot: slot ? slot.i : null,
     decision, comment, signature: decision === 'OK' ? ME.signature : null, at: now() };
   try { await store.add('signatures', s); } catch (e) { uiAlert('No se pudo registrar la firma: ' + e.message, { tone: 'danger', title: 'Error' }); return render(); }
   D.signatures.push(s);
@@ -1260,7 +1280,7 @@ function shareMail(d, to) {
   return `mailto:${to.join(',')}?subject=${enc(`Listo para firmar: ${d.code} V${v.n}`)}&body=${enc(body)}`;
 }
 function shareDialog(d, justUploaded) {
-  const v = latest(d), link = docLink(d), pend = pendingSigners(d), to = (pend.length ? pend : signerRows(d, v)).map(x => x.email);
+  const v = latest(d), link = docLink(d), pend = pendingSigners(d), to = pendEmails(pend.length ? pend : signerRows(d, v));
   openDialog(dlgHead(justUploaded ? `${esc(d.code)} enviado a firma` : 'Compartir documento', justUploaded ? `Versión V${v.n} registrada. Avisa al equipo de que está listo para firmar.` : 'Copia el enlace o avisa por correo a las personas que faltan por firmar.') + `
     ${justUploaded ? `<div class="alert a-ok">${icon('checkcircle')}<div><b>${esc(v.title || d.title)}</b> ya está en el circuito «${esc(v.circuitName)}».</div></div>` : ''}
     <label class="fld">Enlace al documento<div class="copyrow"><input id="shLink" readonly value="${esc(link)}"><button type="button" class="btn primary" id="shCopy">${icon('copy')}Copiar enlace</button></div></label>
@@ -1913,14 +1933,17 @@ function editCircuit(c) {
     const w = c ? structuredClone(c) : { id: 'c-' + uid(), name: '', description: '', order: 'any', signers: [], createdBy: ME.id, createdAt: now() };
     w.signers = signerList(w);
     const dlg = openDialog('', 'wide'); let result = null; dlg.onclose = () => res(result);
-    let showNew = false;
+    let showNew = false, gEdit = null; // gEdit: índice del grupo que se edita o 'new'
+    const used = (skip = -1) => new Set(w.signers.flatMap((s, i) => i === skip ? [] : slotEmails(s)));
     const sync = () => {
       w.name = $('#cName').value.trim(); w.description = $('#cDesc').value.trim();
       w.order = $('input[name=cOrder]:checked', dlg.body)?.value || 'any';
       $$('[data-role]', dlg.body).forEach(i => { w.signers[+i.dataset.role].role = i.value.trim(); });
     };
     const draw = () => {
-      const avail = D.users.filter(u => !w.signers.some(s => s.email === u.id)).sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+      const taken = used(), sorted = D.users.slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+      const avail = sorted.filter(u => !taken.has(u.id));
+      const g = gEdit === 'new' ? { role: '', members: [] } : gEdit != null ? w.signers[gEdit] : null, gTaken = gEdit != null ? used(gEdit === 'new' ? -1 : gEdit) : null;
       dlg.body.innerHTML = dlgHead(isNew ? 'Nuevo circuito de firma' : 'Editar circuito', 'Los cambios se aplican a los documentos que se suban a partir de ahora.') + `<div class="form">
         <div class="form-grid"><label>Nombre del circuito <em>*</em><input id="cName" value="${esc(w.name)}" placeholder="Ej.: Aprobación de diseños AAFF"></label>
           <label>Descripción<input id="cDesc" value="${esc(w.description || '')}" placeholder="Para qué se usa este circuito"></label></div>
@@ -1928,11 +1951,22 @@ function editCircuit(c) {
           <label class="pick ${w.order !== 'seq' ? 'on' : ''}"><input type="radio" name="cOrder" value="any" ${w.order !== 'seq' ? 'checked' : ''}><span class="pick-b"><b>${icon('split')} En paralelo</b><small>Todas las personas firman a la vez, en cualquier orden.</small></span></label>
           <label class="pick ${w.order === 'seq' ? 'on' : ''}"><input type="radio" name="cOrder" value="seq" ${w.order === 'seq' ? 'checked' : ''}><span class="pick-b"><b>${icon('listordered')} Secuencial</b><small>Cada persona firma después de la anterior.</small></span></label></div></div>
         <div class="fld"><span>Participantes <em>*</em> <span class="muted" style="font-weight:400">· el rol es el título de su recuadro en el cuadro de firmas del PDF</span></span>
-          <ul class="slist">${w.signers.map((s, i) => `<li><span class="num">${i + 1}</span>${avatar(s.email, 'sm')}<span class="who-b"><b>${esc(uname(s.email))}</b><small>${esc(s.email)}</small></span>
-            <input data-role="${i}" value="${esc(s.role || '')}" placeholder="Rol (p. ej. Product)" aria-label="Rol de ${esc(uname(s.email))}">
+          <ul class="slist">${w.signers.map((s, i) => `<li class="${isGroup(s) ? 'grp' : ''}"><span class="num">${i + 1}</span>${isGroup(s)
+            ? `${avStack(s.members, 3)}<span class="who-b"><b><span class="gtag">${icon('users')}Grupo · firma 1 de ${s.members.length}</span></b><small>${esc(memberNames(s))}</small></span>
+            <input data-role="${i}" value="${esc(s.role || '')}" placeholder="Nombre (p. ej. Dirección - Executive)" aria-label="Nombre del grupo">
+            <button type="button" class="icon-btn sm" data-gedit="${i}" aria-label="Editar personas del grupo" title="Editar personas del grupo">${icon('pencil')}</button>`
+            : `${avatar(s.email, 'sm')}<span class="who-b"><b>${esc(uname(s.email))}</b><small>${esc(s.email)}</small></span>
+            <input data-role="${i}" value="${esc(s.role || '')}" placeholder="Rol (p. ej. Product)" aria-label="Rol de ${esc(uname(s.email))}">`}
             <button type="button" class="icon-btn sm" data-up="${i}" ${i === 0 ? 'disabled' : ''} aria-label="Subir">${icon('arrowup')}</button><button type="button" class="icon-btn sm" data-down="${i}" ${i === w.signers.length - 1 ? 'disabled' : ''} aria-label="Bajar">${icon('arrowdown')}</button><button type="button" class="icon-btn sm" data-del="${i}" aria-label="Quitar">${icon('trash')}</button></li>`).join('') || '<li class="empty-row">Aún no hay participantes. Añade al menos uno.</li>'}</ul>
           <div class="add-row"><select id="cAdd" aria-label="Añadir participante"><option value="">Añadir participante…</option>${avail.map(u => `<option value="${esc(u.id)}">${esc(u.name || u.id)} · ${esc(u.role || u.id)}</option>`).join('')}</select>
+            <button type="button" class="btn" id="cNewG" title="Un paso que puede firmar cualquiera de varias personas">${icon('users')}Añadir grupo</button>
             <button type="button" class="btn" id="cNewP">${icon('plus')}Nueva persona</button></div>
+          ${g ? `<div class="newp" id="grpBox"><b style="display:block;margin-bottom:4px">${gEdit === 'new' ? 'Nuevo grupo de firma' : 'Editar grupo de firma'}</b>
+            <p class="muted" style="font-size:13px;margin:0 0 10px">Basta con que firme <b>una</b> de las personas marcadas. En el cuadro de firmas del PDF aparece el nombre del grupo con la firma de quien lo haya firmado.</p>
+            <label class="fld">Nombre del grupo <em>*</em><input id="gRole" value="${esc(g.role || '')}" placeholder="Ej.: Dirección - Executive"></label>
+            <div class="gpick">${sorted.map(u => { const dis = gTaken.has(u.id); return `<label class="${dis ? 'dis' : ''}" ${dis ? 'title="Ya está en otro paso del circuito"' : ''}><input type="checkbox" value="${esc(u.id)}" ${g.members.includes(u.id) ? 'checked' : ''} ${dis ? 'disabled' : ''}>${avatar(u.id, 'xs')}<span><b>${esc(u.name || u.id)}</b><small>${esc(u.role || u.id)}</small></span></label>`; }).join('')}</div>
+            <div class="err" id="gErr"></div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button type="button" class="btn" id="gCancel">Cancelar</button><button type="button" class="btn primary" id="gSave">${gEdit === 'new' ? 'Añadir grupo al circuito' : 'Guardar grupo'}</button></div></div>` : ''}
           <div class="newp" id="newP" ${showNew ? '' : 'hidden'}><div class="form-grid">
             <label>Correo <em>*</em><input id="npE" type="email" placeholder="nombre@empresa.com"></label><label>Nombre y apellido<input id="npN"></label>
             <label>Rol / cargo<input id="npR" placeholder="Graphic designer, Product…"></label><div class="fld" style="display:flex;align-items:flex-end"><button type="button" class="btn primary" id="npAdd">Añadir al circuito</button></div></div><div class="err" id="npErr"></div></div>
@@ -1943,7 +1977,18 @@ function editCircuit(c) {
       dlg.bindClose();
       $$('input[name=cOrder]', dlg.body).forEach(r => { r.onchange = () => { sync(); draw(); }; });
       $('#cAdd').onchange = e => { sync(); const em = e.target.value; if (em && !w.signers.some(s => s.email === em)) w.signers.push({ email: em, role: userOf(em)?.role || '' }); draw(); };
-      $('#cNewP').onclick = () => { sync(); showNew = !showNew; draw(); if (showNew) $('#npE').focus(); };
+      $('#cNewP').onclick = () => { sync(); showNew = !showNew; gEdit = null; draw(); if (showNew) $('#npE').focus(); };
+      $('#cNewG').onclick = () => { sync(); gEdit = gEdit === 'new' ? null : 'new'; showNew = false; draw(); if (gEdit) $('#gRole').focus(); };
+      $$('[data-gedit]', dlg.body).forEach(b => { b.onclick = () => { sync(); gEdit = +b.dataset.gedit; showNew = false; draw(); }; });
+      if ($('#gCancel')) $('#gCancel').onclick = () => { sync(); gEdit = null; draw(); };
+      if ($('#gSave')) $('#gSave').onclick = () => {
+        const role = $('#gRole').value.trim(), members = $$('#grpBox input[type=checkbox]:checked', dlg.body).map(x => x.value);
+        if (!role) { $('#gErr').textContent = 'Pon un nombre al grupo (p. ej. Dirección - Executive).'; return; }
+        if (members.length < 2) { $('#gErr').textContent = 'Marca al menos dos personas: el grupo lo firma cualquiera de ellas.'; return; }
+        sync();
+        if (gEdit === 'new') w.signers.push({ role, members }); else w.signers[gEdit] = { role, members };
+        gEdit = null; draw();
+      };
       if ($('#npAdd')) $('#npAdd').onclick = async () => {
         const em = normEmail($('#npE').value); if (!isEmail(em)) { $('#npErr').textContent = 'Escribe un correo válido.'; return; }
         sync(); await ensureUser(em, $('#npN').value.trim(), $('#npR').value.trim());
@@ -1952,11 +1997,12 @@ function editCircuit(c) {
       };
       $$('[data-up]', dlg.body).forEach(b => { b.onclick = () => { sync(); const i = +b.dataset.up; if (i > 0) [w.signers[i - 1], w.signers[i]] = [w.signers[i], w.signers[i - 1]]; draw(); }; });
       $$('[data-down]', dlg.body).forEach(b => { b.onclick = () => { sync(); const i = +b.dataset.down; if (i < w.signers.length - 1) [w.signers[i + 1], w.signers[i]] = [w.signers[i], w.signers[i + 1]]; draw(); }; });
-      $$('[data-del]', dlg.body).forEach(b => { b.onclick = () => { sync(); w.signers.splice(+b.dataset.del, 1); draw(); }; });
+      $$('[data-del]', dlg.body).forEach(b => { b.onclick = () => { sync(); w.signers.splice(+b.dataset.del, 1); gEdit = null; draw(); }; });
       $('#cSave').onclick = async () => {
         sync();
         if (!w.name) { $('#cName').focus(); return uiAlert('Pon un nombre al circuito.'); }
         if (!w.signers.length) return uiAlert('Añade al menos una persona que deba firmar.');
+        if (w.signers.some(s => isGroup(s) && !s.role)) return uiAlert('Pon un nombre a cada grupo de firma.');
         const b = $('#cSave'); b.classList.add('busy');
         await store.put('circuits', w);
         const i = D.circuits.findIndex(x => x.id === w.id); if (i >= 0) D.circuits[i] = w; else D.circuits.push(w);
@@ -2039,7 +2085,7 @@ function viewUsers(m) {
       <td><span class="who">${avatar(u.id)}<span><b>${esc(u.name || '—')}</b>${u.id === ME.id ? ' <span class="badge b-info" style="height:20px">Tú</span>' : ''}<small class="muted" style="display:block">${esc(u.id)}</small></span></span></td>
       <td>${esc(u.role || '—')}</td>
       <td>${u.signature ? `<img class="sigthumb" src="${u.signature}" alt="Firma de ${esc(u.name || u.id)}">` : '<span class="badge b-warn">Sin firma</span>'}</td>
-      <td><div class="chips">${D.circuits.filter(c => signerList(c).some(s => s.email === u.id)).map(c => `<span class="chip">${esc(c.name)}</span>`).join('') || '<span class="muted">—</span>'}</div></td>
+      <td><div class="chips">${D.circuits.filter(c => allSignerEmails(c).includes(u.id)).map(c => `<span class="chip">${esc(c.name)}</span>`).join('') || '<span class="muted">—</span>'}</div></td>
       <td class="act"><button type="button" class="icon-btn sm" data-u="${esc(u.id)}" aria-label="Editar">${icon('pencil')}</button></td></tr>`).join('')
       || `<tr><td colspan="5">${emptyState('users', 'Sin resultados', 'Prueba con otra búsqueda.', '', true)}</td></tr>`;
     $$('[data-u]', m).forEach(b => { b.onclick = () => editUser(userOf(b.dataset.u)); });
@@ -2065,8 +2111,8 @@ function editUser(u) {
     await store.put('users', rec); dlg.close(); toast('Guardado'); render();
   };
   if ($('#udel')) $('#udel').onclick = async () => {
-    if (D.circuits.some(c => signerList(c).some(s => s.email === u.id))) return uiAlert('Quita antes a esta persona de los circuitos en los que participa.', { tone: 'warn' });
-    if (D.documents.some(d => pendingSigners(d).some(p => p.email === u.id))) return uiAlert('Tiene documentos pendientes de firma.', { tone: 'warn' });
+    if (D.circuits.some(c => allSignerEmails(c).includes(u.id))) return uiAlert('Quita antes a esta persona de los circuitos en los que participa.', { tone: 'warn' });
+    if (D.documents.some(d => pendEmails(pendingSigners(d)).includes(u.id))) return uiAlert('Tiene documentos pendientes de firma.', { tone: 'warn' });
     if (!(await uiConfirm(`Se eliminará a ${u.name || u.id}.`, 'Eliminar', { title: '¿Eliminar a esta persona?', tone: 'danger' }))) return;
     await store.del('users', u.id); dlg.close(); toast('Eliminado'); render();
   };

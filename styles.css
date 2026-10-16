@@ -616,3 +616,21 @@ dialog.xl .vscroll { height: min(64vh, calc(100vh - 240px)); }
 .vsrc + .vinfo { margin-left: 0; }
 #spMeta a { color: inherit; }
 @media (max-width: 860px) { .sp-chip span { display: none; } .sp-chip { padding: 0 9px; } }
+
+/* ---------- Grupos de firma (firma cualquiera de varias personas) ---------- */
+.gtag { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; color: var(--primary); background: var(--primary-soft); border-radius: 999px; padding: 2px 8px; vertical-align: middle; white-space: nowrap; }
+.gtag svg { width: 12px; height: 12px; }
+.ic-xs { width: 12px !important; height: 12px !important; vertical-align: -2px; }
+.slist li.grp { background: var(--surface-2); }
+.gpick { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 6px; margin-top: 10px; }
+.gpick label { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); cursor: pointer; }
+.gpick label:has(input:checked) { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary) inset; }
+.gpick label.dis { opacity: .5; cursor: not-allowed; }
+.gpick label span { min-width: 0; }
+.gpick label b, .gpick label small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gpick label small { color: var(--muted); font-size: 12px; }
+.gpick input { width: auto; min-height: 0; margin: 0; }
+@media (max-width: 860px) {
+  .slist li.grp .who-b { order: 4; flex-basis: 100%; }
+  .slist li.grp .who-b b, .slist li.grp .who-b small { white-space: normal; }
+}
