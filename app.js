@@ -9,7 +9,7 @@ const CFG = Object.assign({ appName: 'Circuito de firmas', company: '', supabase
 const SUPABASE_JS = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js';
 const ST = { INC: 'En circuito', REJ: 'Rechazado', APR: 'Aprobado', OBS: 'Obsoleto' };
 const BADGE = { 'En circuito': 'st-pending', 'Rechazado': 'st-ko', 'Aprobado': 'st-ok', 'Sustituida': 'st-muted', 'Pendiente': 'st-pending', 'Esperando turno': 'st-muted', 'OK': 'st-ok', '—': 'st-muted' };
-const COLLS = ['users', 'doctypes', 'prodcats', 'products', 'circuits', 'documents', 'signatures', 'events'];
+const COLLS = ['users', 'doctypes', 'prodcats', 'products', 'circuits', 'companies', 'ugroups', 'documents', 'signatures', 'events'];
 
 /* ---------- Utilidades ---------- */
 const $ = (s, r = document) => r.querySelector(s);
@@ -167,6 +167,12 @@ const SEED = {
   products: [
     { id: 'p-ma-est-col-beauty', code: 'MA.EST.COL.BEAUTY', name: 'Estuche colección Beauty', categoryId: 'pc-beauty', description: 'Producto de ejemplo: edítalo o elimínalo' },
   ],
+  companies: [
+    { id: 'co-viteba', name: 'Viteba', domains: 'viteba.com', description: '' },
+    { id: 'co-doribac', name: 'Doribac', domains: 'doribac.com', description: '' },
+    { id: 'co-kanbai', name: 'Kanbai', domains: 'kanbai.com', description: '' },
+  ],
+  ugroups: [],
   circuits: [
     { id: 'c-aaff', name: 'Aprobación de diseños AAFF', description: 'Revisión y OK de artes finales', order: 'any',
       signers: [{ email: 'respinosa@viteba.com', role: 'Graphic designer' }, { email: 'aheredia@viteba.com', role: 'Product' }] },
@@ -175,7 +181,14 @@ const SEED = {
   ],
 };
 async function seedIfEmpty() {
-  if (await store.get('meta', 'seed')) return;
+  if (await store.get('meta', 'seed')) {
+    // Migración: las empresas del grupo se añaden una vez a instalaciones ya existentes
+    if (!(await store.get('meta', 'seed-companies'))) {
+      if (!(await store.all('companies')).length) for (const r of SEED.companies) await store.put('companies', { ...r, createdAt: now() });
+      await store.put('meta', { id: 'seed-companies', at: now() });
+    }
+    return;
+  }
   for (const [coll, rows] of Object.entries(SEED))
     for (const r of rows) {
       const ex = await store.get(coll, r.id);
@@ -183,6 +196,7 @@ async function seedIfEmpty() {
       else if (coll === 'users' && (!ex.name || !ex.role)) await store.put(coll, { ...ex, name: ex.name || r.name, role: ex.role || r.role });
     }
   await store.put('meta', { id: 'seed', at: now() });
+  await store.put('meta', { id: 'seed-companies', at: now() });
 }
 
 /* ---------- Datos de ejemplo para la demo (solo si config.js pide demoSeed) ---------- */
@@ -241,10 +255,85 @@ const D = Object.fromEntries(COLLS.map(c => [c, []]));
 async function refresh() {
   const res = await Promise.all(COLLS.map(c => store.all(c)));
   COLLS.forEach((c, i) => { D[c] = res[i]; });
-  D.documents = D.documents.filter(d => !d.deleted); // los eliminados se conservan en la base de datos, pero no se muestran
   ME = D.users.find(u => u.id === ME.id) || ME;
+  D.documents = D.documents.filter(d => !d.deleted && canSee(d)); // eliminados u ocultos para esta persona
+  const vis = new Set(D.documents.map(d => d.id));
+  D.signatures = D.signatures.filter(x => vis.has(x.docId)); D.events = D.events.filter(x => vis.has(x.docId));
 }
 const byId = (coll, id) => D[coll].find(x => x.id === id);
+/* ---------- Visibilidad por empresa, grupo o persona ----------
+   visibility: { mode: 'all' } (todo Gafial Group) o
+               { mode: 'restricted', companies: [ids], groups: [ids], users: [emails] }
+   Quien sube el documento y las personas de su circuito de firma lo ven siempre. */
+const domainsOf = co => String(co?.domains || '').toLowerCase().split(/[\s,;]+/).map(x => x.replace(/^@/, '').trim()).filter(Boolean);
+const companyOf = email => { const dom = String(email || '').split('@')[1]; return dom ? D.companies.find(c => domainsOf(c).includes(dom)) : null; };
+const isRestricted = vis => vis?.mode === 'restricted';
+function alwaysSees(d, email) { return d.createdBy === email || d.versions.some(v => v.uploadedBy === email || allSignerEmails(v).includes(email)); }
+function visAllows(vis, email) {
+  if (!isRestricted(vis)) return true;
+  if (!email) return false;
+  if ((vis.users || []).includes(email)) return true;
+  const dom = email.split('@')[1];
+  if ((vis.companies || []).some(id => domainsOf(byId('companies', id)).includes(dom))) return true;
+  return (vis.groups || []).some(id => (byId('ugroups', id)?.members || []).includes(email));
+}
+function canSee(d, email = ME?.id) { return !isRestricted(d.visibility) || alwaysSees(d, email) || visAllows(d.visibility, email); }
+function visLabel(vis) {
+  if (!isRestricted(vis)) return 'Todo Gafial Group';
+  const parts = [...(vis.companies || []).map(id => byId('companies', id)?.name).filter(Boolean),
+    ...(vis.groups || []).map(id => byId('ugroups', id)?.name).filter(Boolean),
+    ...(vis.users || []).map(e => uname(e))];
+  return parts.length ? 'Solo ' + parts.join(', ') : 'Solo firmantes y quien lo sube';
+}
+const visValid = vis => !!vis && (!isRestricted(vis) || !!((vis.companies || []).length + (vis.groups || []).length + (vis.users || []).length));
+function visPickerHtml(vis, opts = {}) {
+  const r = isRestricted(vis), v = vis || {}, users = D.users.slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+  const box = (name, val, on, inner, dis = '') => `<label class="${dis ? 'dis' : ''}"><input type="checkbox" data-vis="${name}" value="${esc(val)}" ${on ? 'checked' : ''} ${dis}>${inner}</label>`;
+  return `<div class="vis" id="${opts.id || 'visPick'}">
+    <div class="seg" role="radiogroup" aria-label="Quién puede ver el documento">
+      <label class="pick ${vis && !r ? 'on' : ''}"><input type="radio" name="visMode" value="all" ${vis && !r ? 'checked' : ''}><span class="pick-b"><b>${icon('users')} Todo Gafial Group</b><small>Cualquier persona de cualquier empresa del grupo.</small></span></label>
+      <label class="pick ${r ? 'on' : ''}"><input type="radio" name="visMode" value="restricted" ${r ? 'checked' : ''}><span class="pick-b"><b>${icon('lock')} Restringido</b><small>Solo las empresas, grupos o personas que elijas.</small></span></label></div>
+    ${r ? `<div class="vis-sec"><b>Empresas</b> <span class="muted">· por el dominio del correo</span>
+        <div class="gpick">${D.companies.map(c => box('companies', c.id, (v.companies || []).includes(c.id), `<span class="co-ic">${icon('building')}</span><span><b>${esc(c.name)}</b><small>@${esc(domainsOf(c).join(', @') || '—')}</small></span>`)).join('') || '<span class="muted">No hay empresas. Créalas en Administración › Empresas.</span>'}</div></div>
+      <div class="vis-sec"><b>Grupos de usuarios</b>
+        <div class="gpick">${D.ugroups.map(g => box('groups', g.id, (v.groups || []).includes(g.id), `${avStack(g.members || [], 3)}<span><b>${esc(g.name)}</b><small>${(g.members || []).length} personas</small></span>`)).join('') || '<span class="muted">Aún no hay grupos. Créalos en Administración › Grupos de usuarios.</span>'}</div></div>
+      <div class="vis-sec"><b>Personas concretas</b>
+        <div class="search" style="margin:8px 0 0;max-width:320px">${icon('search')}<input type="search" data-visq placeholder="Buscar persona…" aria-label="Buscar persona"></div>
+        <div class="gpick" data-vis-users>${users.map(u => box('users', u.id, (v.users || []).includes(u.id), `${avatar(u.id, 'xs')}<span><b>${esc(u.name || u.id)}</b><small>${esc(companyOf(u.id)?.name || u.id.split('@')[1] || '')}${u.role ? ' · ' + esc(u.role) : ''}</small></span>`)).join('')}</div></div>
+      <p class="muted vis-note">${icon('info', 'ic-xs')} Quien sube el documento y las personas de su circuito de firma lo ven siempre.</p>` : ''}
+  </div>`;
+}
+function mountVisPicker(root, get, set, redraw) {
+  $$('input[name=visMode]', root).forEach(x => { x.onchange = () => { const cur = get() || {}; set(x.value === 'all' ? { mode: 'all' } : { mode: 'restricted', companies: cur.companies || [], groups: cur.groups || [], users: cur.users || [] }); redraw(); }; });
+  $$('[data-vis]', root).forEach(x => { x.onchange = () => {
+    const cur = { mode: 'restricted', companies: [], groups: [], users: [], ...(get() || {}) }, k = x.dataset.vis;
+    cur[k] = x.checked ? [...new Set([...(cur[k] || []), x.value])] : (cur[k] || []).filter(y => y !== x.value);
+    set(cur); x.closest('label').classList.toggle('on', x.checked);
+  }; });
+  const q = $('[data-visq]', root);
+  if (q) q.oninput = () => { const t = q.value.trim().toLowerCase(); $$('[data-vis-users] label', root).forEach(l => { l.hidden = !!t && !l.textContent.toLowerCase().includes(t); }); };
+}
+function changeVisibilityDialog(d) {
+  let vis = structuredClone(d.visibility || { mode: 'all' });
+  const dlg = openDialog('', 'wide');
+  const draw = () => {
+    dlg.body.innerHTML = dlgHead('Quién puede ver este documento', `${esc(d.code)} · ${esc(latest(d).title || d.title)}`) + visPickerHtml(vis, { id: 'visDlg' }) +
+      `<div class="err" id="visErr"></div><div class="dlg-foot"><button type="button" class="btn" data-x>Cancelar</button><button type="button" class="btn primary" id="visSave">${icon('check')}Guardar visibilidad</button></div>`;
+    dlg.bindClose();
+    mountVisPicker(dlg.body, () => vis, x => { vis = x; }, draw);
+    $('#visSave').onclick = async () => {
+      if (!visValid(vis)) { $('#visErr').textContent = 'Marca al menos una empresa, un grupo o una persona.'; return; }
+      const fresh = (await store.get('documents', d.id)) || d;
+      if (isRestricted(vis) && !alwaysSees(fresh, ME.id) && !visAllows(vis, ME.id)) vis.users = [...(vis.users || []), ME.id]; // quien lo cambia no se queda fuera
+      fresh.visibility = isRestricted(vis) ? vis : { mode: 'all' };
+      await store.put('documents', fresh);
+      const i = D.documents.findIndex(x => x.id === d.id); if (i >= 0) D.documents[i] = fresh;
+      await addEvent(d.id, 'Visibilidad cambiada', visLabel(fresh.visibility));
+      dlg.close(); toast('Visibilidad guardada'); render();
+    };
+  };
+  draw();
+}
 const userOf = e => D.users.find(u => u.id === e);
 const uname = e => userOf(e)?.name || e;
 const approvedList = () => D.documents.flatMap(d => d.versions.filter(v => verStatus(d, v) === ST.APR).map(v => ({ d, v, at: approvedAt(d, v) }))).sort((a, b) => b.at.localeCompare(a.at));
@@ -373,6 +462,7 @@ const ICON_PATHS = {
   send: '<path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/>',
   bulb: '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>',
   hash: '<line x1="4" x2="20" y1="9" y2="9"/><line x1="4" x2="20" y1="15" y2="15"/><line x1="10" x2="8" y1="3" y2="21"/><line x1="16" x2="14" y1="3" y2="21"/>',
+  building: '<rect width="16" height="20" x="4" y="2" rx="2" ry="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01"/><path d="M16 6h.01"/><path d="M12 6h.01"/><path d="M12 10h.01"/><path d="M12 14h.01"/><path d="M16 10h.01"/><path d="M16 14h.01"/><path d="M8 10h.01"/><path d="M8 14h.01"/>',
   lock: '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
   split: '<path d="M16 3h5v5"/><path d="M8 3H3v5"/><path d="M12 22v-8.3a4 4 0 0 0-1.172-2.872L3 3"/><path d="m15 9 6-6"/>',
   listordered: '<line x1="10" x2="21" y1="6" y2="6"/><line x1="10" x2="21" y1="12" y2="12"/><line x1="10" x2="21" y1="18" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>',
@@ -412,7 +502,7 @@ const badge = sbadge;
 const docLabel = (d, v = latest(d)) => isObsolete(v) ? ST.OBS : (v.n === latest(d).n && canSign(d, ME.id)) ? 'Pendiente de mi firma' : verStatus(d, v);
 const vigBadge = (d, v) => isObsolete(v) ? sbadge(ST.OBS) : circuitStatus(d, v) === ST.APR ? sbadge('Vigente') : '';
 const isImg = v => /^image\//.test(v.fileType || '');
-const docCell = (d, v = latest(d)) => `<div class="doccell"><span class="fi ${isImg(v) ? 'img' : ''}">${icon(isImg(v) ? 'image' : 'filetext')}</span><span class="min0"><b>${esc(v.title || d.title)}</b><small class="mono">${esc(d.code)} · V${v.n}</small></span></div>`;
+const docCell = (d, v = latest(d)) => `<div class="doccell"><span class="fi ${isImg(v) ? 'img' : ''}">${icon(isImg(v) ? 'image' : 'filetext')}</span><span class="min0"><b>${esc(v.title || d.title)}${isRestricted(d.visibility) ? ` <span class="vis-lock" title="${esc(visLabel(d.visibility))}">${icon('lock')}</span>` : ''}</b><small class="mono">${esc(d.code)} · V${v.n}</small></span></div>`;
 function progress(d, v = latest(d)) {
   const rows = signerRows(d, v), ok = rows.filter(r => r.sig?.decision === 'OK').length;
   return `<div class="prog" title="${ok} de ${rows.length} firmas"><span class="prog-bar"><i style="width:${rows.length ? ok / rows.length * 100 : 0}%"></i></span><span>${ok}/${rows.length}</span></div>`;
@@ -597,7 +687,7 @@ function showNewPassword(email) {
 /* ---------- Estructura de la aplicación ---------- */
 const NAV = [
   ['Operaciones', [['home', 'Inicio', 'home'], ['docs', 'Estado de documentos', 'fileclock'], ['historico', 'Histórico aprobados', 'archive']]],
-  ['Administración', [['circuits', 'Circuitos de firma', 'workflow'], ['cat/doctypes', 'Tipos de documento', 'file'], ['cat/products', 'Productos', 'package'], ['cat/prodcats', 'Categorías de producto', 'tag'], ['users', 'Usuarios', 'users']]],
+  ['Administración', [['circuits', 'Circuitos de firma', 'workflow'], ['cat/doctypes', 'Tipos de documento', 'file'], ['cat/products', 'Productos', 'package'], ['cat/prodcats', 'Categorías de producto', 'tag'], ['cat/companies', 'Empresas', 'building'], ['groups', 'Grupos de usuarios', 'users'], ['users', 'Usuarios', 'users']]],
   ['Mi cuenta', [['perfil', 'Mi perfil y firma', 'pen']]],
 ];
 function closeNav() { $('#side')?.classList.remove('open'); $('#scrim')?.remove(); }
@@ -671,7 +761,7 @@ async function afterLogin(email) {
 }
 
 /* ---------- Router ---------- */
-const ROUTES = { home: viewHome, upload: viewUpload, doc: viewDoc, docs: viewDocs, historico: viewHistory, circuits: viewCircuits, cat: viewCatalog, users: viewUsers, perfil: viewProfile };
+const ROUTES = { groups: viewGroups, home: viewHome, upload: viewUpload, doc: viewDoc, docs: viewDocs, historico: viewHistory, circuits: viewCircuits, cat: viewCatalog, users: viewUsers, perfil: viewProfile };
 let renderSeq = 0, cleanups = [];
 function skeleton() {
   const line = (w, h = 14) => `<div class="sk sk-line" style="width:${w};height:${h}px"></div>`;
@@ -718,6 +808,7 @@ function docMenu(btn, d, n) {
     { label: 'Copiar enlace', ic: 'link', act: async () => { const ok = await copyText(docLink(d)); toast(ok ? 'Enlace copiado' : 'No se pudo copiar el enlace', 2500, ok ? 'ok' : 'error'); } },
     ...(pend.length ? [{ label: 'Avisar a pendientes', ic: 'mail', act: () => shareDialog(d, false) }] : []),
     { label: 'Subir nueva versión', ic: 'refresh', act: () => { location.hash = '#upload/' + d.id; } },
+    { label: 'Cambiar visibilidad', ic: 'lock', act: () => changeVisibilityDialog(d) },
     ...(n === latest(d).n && !isObsolete(v) ? [{ label: 'Cambiar circuito / reiniciar firmas', ic: 'workflow', act: () => changeCircuitDialog(d) }] : []),
     '-',
     { label: 'Descargar PDF firmado', ic: 'download', disabled: !apr, title: apr ? '' : 'Disponible cuando hayan firmado todas las personas', act: () => downloadSigned(d, v) },
@@ -915,6 +1006,7 @@ function viewUpload(m, fromId) {
     code: from?.code || '', title: from ? (latest(from).title || from.title) : '',
     docTypeId: from?.docTypeId || (byId('doctypes', 'dt-aaff') ? 'dt-aaff' : D.doctypes[0]?.id || ''),
     circuitId: from?.circuitId || D.circuits[0]?.id || '', note: '',
+    vis: from ? structuredClone(from.visibility || { mode: 'all' }) : null, visTouched: !!from,
   };
   const STEPS = ['Documento', 'Información', 'Circuito de firma', 'Revisar y enviar'];
   m.innerHTML = pageHead(from ? `Nueva versión de <span class="mono">${esc(from.code)}</span>` : 'Subir documento', 'Añade el documento, completa su información y elige el circuito de firma.') + `
@@ -932,6 +1024,8 @@ function viewUpload(m, fromId) {
       if (!w.code.trim()) return 'Indica el código de material.';
       if (!w.title.trim()) return 'Escribe el nombre del documento.';
       if (!byId('doctypes', w.docTypeId)) return 'Elige el tipo de documento.';
+      if (!w.vis) return 'Indica quién podrá ver el documento.';
+      if (!visValid(w.vis)) return 'Marca al menos una empresa, un grupo o una persona que pueda verlo.';
     }
     if (step >= 3) { const c = circuit(); if (!c) return 'Elige un circuito de firma.'; if (!signerList(c).length) return 'El circuito elegido no tiene firmantes.'; }
     if (step >= 4 && SPC.enabled && !spConnected()) return 'Conecta SharePoint para enviar el documento.';
@@ -989,7 +1083,10 @@ function viewUpload(m, fromId) {
           <button type="button" class="btn" id="newType">${icon('plus')}Nuevo tipo</button></div></div>
         <div class="fld"><span>Producto y categoría</span><div class="ro" id="fProd"></div></div>
         <label class="fld span2">Comentario para los firmantes <span class="muted" style="font-weight:400">(opcional)</span><textarea id="fNote" rows="3" placeholder="Indica qué deben revisar o qué ha cambiado respecto a la versión anterior.">${esc(w.note)}</textarea></label>
+        <div class="fld span2" id="visWrap"><span>¿Quién podrá ver este documento? <em>*</em></span>${visPickerHtml(w.vis)}</div>
       </div>`;
+      const drawVis = () => { $('#visWrap').innerHTML = `<span>¿Quién podrá ver este documento? <em>*</em></span>${visPickerHtml(w.vis)}`; mountVisPicker($('#visWrap'), () => w.vis, x => { w.vis = x; upd(); }, drawVis); upd(); };
+      mountVisPicker($('#visWrap'), () => w.vis, x => { w.vis = x; upd(); }, drawVis);
       const prodInfo = () => {
         const p = product(), cat = p && byId('prodcats', p.categoryId);
         $('#fProd').innerHTML = !w.code.trim() ? 'Se completa al indicar el código de material.'
@@ -1031,7 +1128,8 @@ function viewUpload(m, fromId) {
             <dt>Tipo</dt><dd>${esc(dt?.name || '—')}</dd>
             <dt>Producto</dt><dd>${p ? esc(p.name) + (cat ? ` · ${esc(cat.name)}` : '') : '<span class="muted">Código nuevo · se añadirá a Productos</span>'}</dd>
             <dt>Versión</dt><dd><span class="ver">V${vi.n}</span></dd>
-            <dt>Comentario</dt><dd>${w.note.trim() ? esc(w.note.trim()) : '<span class="muted">Sin comentario</span>'}</dd></dl>
+            <dt>Comentario</dt><dd>${w.note.trim() ? esc(w.note.trim()) : '<span class="muted">Sin comentario</span>'}</dd>
+            <dt>Visible para</dt><dd>${icon(isRestricted(w.vis) ? 'lock' : 'users', 'ic-xs')} ${esc(visLabel(w.vis))}${isRestricted(w.vis) ? '<small class="muted" style="display:block">y siempre quien lo sube y los firmantes</small>' : ''}</dd></dl>
           ${vi.obsoletes ? `<div class="alert ${vi.supersede ? 'a-warn' : 'a-info'}" style="margin-top:16px">${icon(vi.supersede ? 'alert' : 'archive')}<div>Al enviar, la <b>V${vi.n - 1}</b> pasará a <b>Obsoleto</b>${vi.supersede ? ' y sus firmas pendientes dejarán de pedirse' : ''}${SPC.enabled ? ' y sus archivos se moverán a la carpeta de obsoletos en SharePoint' : ''}.</div></div>` : ''}
           ${SPC.enabled ? (spConnected() ? `<div class="alert a-info" style="margin-top:16px">${icon('cloud')}<div>Se guardará en SharePoint en <b>${esc(spFolderLabel([SPC.folders.circuit, dt?.name || 'Sin tipo', w.code.trim()].map(spSafe).join('/')))}</b>.</div></div>`
             : `<div class="alert a-warn" style="margin-top:16px">${icon('cloud')}<div><b>Conecta SharePoint para enviar.</b> Los documentos se guardan en la biblioteca de la empresa.</div><button type="button" class="btn sm" id="wzSp">Conectar SharePoint</button></div>`) : ''}
@@ -1082,6 +1180,7 @@ function viewUpload(m, fromId) {
       doc.versions.push({ n, fileName: file.name, fileType: type, path, hash, size: file.size, uploadedBy: ME.id, uploadedAt: now(),
         title, note: w.note.trim(), signers: snapSigners(c), order: c.order || 'any', circuitName: c.name });
       doc.title = title; doc.docTypeId = dt.id;
+      doc.visibility = isRestricted(w.vis) ? w.vis : { mode: 'all' };
       await store.put('documents', doc);
       if (!D.products.some(p => p.code.toLowerCase() === code.toLowerCase()))
         await store.put('products', { id: 'p-' + uid(), code, name: title, categoryId: '', description: '', createdAt: now() });
@@ -1141,7 +1240,7 @@ function viewDoc(m, id) {
         <div class="eyebrow mono">${esc(d.code)}</div>
         <h1 class="doc-title"><span>${esc(v.title || d.title)}</span><span id="docStatus">${sbadge(label)}</span>${!obs && circuitStatus(d, v) === ST.APR ? sbadge('Vigente') : ''}</h1>
         <div class="meta"><span>${icon('file')}<b>${esc(dt?.name || '—')}</b></span><span>${icon('user')}Solicitante: <b>${esc(uname(v.uploadedBy))}</b></span>
-          <span>${icon('calendar')}${fmtDT(v.uploadedAt)}</span><span>${icon('layers')}Versión <b>V${v.n}</b></span>
+          <span>${icon('calendar')}${fmtDT(v.uploadedAt)}</span><span>${icon('layers')}Versión <b>V${v.n}</b></span><span title="Quién puede ver este documento">${icon(isRestricted(d.visibility) ? 'lock' : 'users')}${esc(visLabel(d.visibility))}</span>
           ${SPC.enabled ? `<span id="spMeta">${icon('cloud')}${v.sp?.file ? `SharePoint: <a href="${esc(v.sp.file.webUrl)}" target="_blank" rel="noopener"><b>${esc(SPC.folders[spStage(d, v)])}</b></a>${spNeedsSync(d) ? ' <span class="badge b-warn">Pendiente de mover</span>' : ''}` : '<span class="badge b-warn">Pendiente de guardar en SharePoint</span>'}</span>` : ''}</div></div>
       <div class="page-actions">
         ${circuitStatus(d, v) === ST.APR ? dlBtn(d, v, { cls: 'btn primary', label: 'Descargar PDF firmado', id: 'dl' }) : ''}
@@ -1174,6 +1273,7 @@ function viewDoc(m, id) {
       <dt>Producto</dt><dd>${p ? esc(p.name) + (cat ? ' · ' + esc(cat.name) : '') : '—'}</dd>
       <dt>Tipo de documento</dt><dd>${esc(dt?.name || '—')}</dd>
       <dt>Circuito</dt><dd>${esc(v.circuitName || c?.name || '—')} · ${v.order === 'seq' ? 'firma secuencial' : 'firma en paralelo'}</dd>
+      <dt>Visible para</dt><dd>${esc(visLabel(d.visibility))}${isRestricted(d.visibility) ? '<small class="muted" style="display:block">y siempre quien lo sube y los firmantes</small>' : ''}</dd>
       <dt>Archivo original</dt><dd>${esc(v.fileName)}${v.size ? ` · ${fmtSize(v.size)}` : ''}</dd>
       ${v.note ? `<dt>Comentario</dt><dd>${esc(v.note)}</dd>` : ''}
       ${st === ST.APR ? `<dt>Aprobado</dt><dd>${fmtDTs(approvedAt(d, v))}</dd>` : ''}
@@ -2112,6 +2212,9 @@ const CATS = {
   products: { title: 'Productos', one: 'producto', ic: 'package', intro: 'Catálogo de códigos de material. Al subir un documento con un código nuevo, se añade aquí automáticamente.',
     fields: [{ k: 'code', l: 'Código de material', req: 1, mono: 1 }, { k: 'name', l: 'Nombre', req: 1 }, { k: 'categoryId', l: 'Categoría', ref: 'prodcats' }, { k: 'description', l: 'Descripción', area: 1 }],
     used: x => D.documents.some(d => d.code.toLowerCase() === x.code.toLowerCase()), count: x => D.documents.filter(d => d.code.toLowerCase() === x.code.toLowerCase()).length },
+  companies: { title: 'Empresas', one: 'empresa', ic: 'building', intro: 'Empresas de Gafial Group. Cada persona pertenece a la empresa del dominio de su correo; se usan para decidir quién ve cada documento.',
+    fields: [{ k: 'name', l: 'Nombre', req: 1 }, { k: 'domains', l: 'Dominios de correo (separados por comas)', req: 1, mono: 1, ph: 'viteba.com, viteba.es' }],
+    used: x => D.documents.some(d => (d.visibility?.companies || []).includes(x.id)), count: x => D.users.filter(u => companyOf(u.id)?.id === x.id).length, countL: 'Usuarios' },
   prodcats: { title: 'Categorías de producto', one: 'categoría', ic: 'tag', intro: 'Agrupan los productos del catálogo.',
     fields: [{ k: 'name', l: 'Nombre', req: 1 }, { k: 'description', l: 'Descripción' }], used: x => D.products.some(p => p.categoryId === x.id), count: x => D.products.filter(p => p.categoryId === x.id).length, countL: 'Productos' },
 };
@@ -2137,11 +2240,46 @@ function viewCatalog(m, coll) {
   $('#cq').oninput = draw; draw();
   $('#add').onclick = () => editRecord(coll, null);
 }
+function viewGroups(m) {
+  setCrumbs([['Administración'], ['Grupos de usuarios']]);
+  const rows = D.ugroups.slice().sort((a, b) => a.name.localeCompare(b.name));
+  m.innerHTML = pageHead('Grupos de usuarios', 'Conjuntos de personas (de una o varias empresas) a los que se puede dar acceso a un documento de una vez.', `<button type="button" class="btn primary" id="addG">${icon('plus')}Nuevo grupo</button>`) + `
+    <section class="card flush"><div class="tablewrap"><table class="tbl"><thead><tr><th>Grupo</th><th>Personas</th><th>Documentos</th><th class="act"></th></tr></thead><tbody>
+    ${rows.map(g => `<tr><td><b>${esc(g.name)}</b>${g.description ? `<small>${esc(g.description)}</small>` : ''}</td>
+      <td><span class="who">${avStack(g.members || [], 5)}<span class="muted" style="font-size:13px">${esc((g.members || []).map(e => uname(e)).join(', ') || '—')}</span></span></td>
+      <td><span class="muted">${D.documents.filter(d => (d.visibility?.groups || []).includes(g.id)).length}</span></td>
+      <td class="act"><button type="button" class="icon-btn sm" data-g="${esc(g.id)}" aria-label="Editar">${icon('pencil')}</button></td></tr>`).join('')
+      || `<tr><td colspan="4">${emptyState('users', 'Aún no hay grupos', 'Crea un grupo para dar acceso a varios usuarios a la vez.', '', true)}</td></tr>`}</tbody></table></div></section>`;
+  $('#addG').onclick = () => editGroup(null);
+  $$('[data-g]', m).forEach(b => { b.onclick = () => editGroup(byId('ugroups', b.dataset.g)); });
+}
+function editGroup(g) {
+  const isNew = !g, w = g ? structuredClone(g) : { id: 'ug-' + uid(), name: '', description: '', members: [], createdAt: now(), createdBy: ME.id };
+  const users = D.users.slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+  const dlg = openDialog(dlgHead(isNew ? 'Nuevo grupo de usuarios' : 'Editar grupo de usuarios', 'Las personas del grupo verán los documentos a los que se dé acceso a este grupo.') + `<div class="form">
+    <div class="form-grid"><label>Nombre <em>*</em><input id="gN" value="${esc(w.name)}" placeholder="Ej.: Equipo de diseño"></label><label>Descripción<input id="gD" value="${esc(w.description || '')}"></label></div>
+    <div class="fld"><span>Personas <em>*</em></span><div class="search" style="margin:8px 0 0;max-width:320px">${icon('search')}<input type="search" id="gQ" placeholder="Buscar persona…"></div>
+      <div class="gpick" id="gM">${users.map(u => `<label><input type="checkbox" value="${esc(u.id)}" ${w.members.includes(u.id) ? 'checked' : ''}>${avatar(u.id, 'xs')}<span><b>${esc(u.name || u.id)}</b><small>${esc(companyOf(u.id)?.name || u.id.split('@')[1] || '')}${u.role ? ' · ' + esc(u.role) : ''}</small></span></label>`).join('')}</div></div></div>
+    <div class="dlg-foot">${isNew ? '' : `<button type="button" class="btn danger" id="gDel">${icon('trash')}Eliminar</button><span class="sep"></span>`}<button type="button" class="btn" data-x>Cancelar</button><button type="button" class="btn primary" id="gSave">Guardar grupo</button></div>`, 'wide');
+  $('#gQ').oninput = e => { const t = e.target.value.trim().toLowerCase(); $$('#gM label').forEach(l => { l.hidden = !!t && !l.textContent.toLowerCase().includes(t); }); };
+  $('#gSave').onclick = async () => {
+    w.name = $('#gN').value.trim(); w.description = $('#gD').value.trim(); w.members = $$('#gM input:checked').map(x => x.value);
+    if (!w.name) { $('#gN').focus(); return uiAlert('Pon un nombre al grupo.'); }
+    if (!w.members.length) return uiAlert('Marca al menos una persona.');
+    await store.put('ugroups', w); const i = D.ugroups.findIndex(x => x.id === w.id); if (i >= 0) D.ugroups[i] = w; else D.ugroups.push(w);
+    dlg.close(); toast('Grupo guardado'); render();
+  };
+  if (!isNew) $('#gDel').onclick = async () => {
+    if (D.documents.some(d => (d.visibility?.groups || []).includes(w.id))) return uiAlert('No se puede eliminar: hay documentos visibles para este grupo. Cambia antes su visibilidad.', { tone: 'warn' });
+    if (!(await uiConfirm(`Se eliminará el grupo «${w.name}».`, 'Eliminar', { title: '¿Eliminar el grupo?', tone: 'danger' }))) return;
+    await store.del('ugroups', w.id); D.ugroups = D.ugroups.filter(x => x.id !== w.id); dlg.close(); render();
+  };
+}
 function editRecord(coll, x) {
   const C = CATS[coll], isNew = !x, w = x ? { ...x } : { id: coll.slice(0, 2) + '-' + uid(), createdAt: now() };
   const dlg = openDialog(dlgHead(`${isNew ? 'Nuevo' : 'Editar'} ${C.one}`) + `<form id="rf" class="form" novalidate>
     ${C.fields.map(f => `<label>${f.l}${f.req ? ' <em>*</em>' : ''}${f.ref ? `<select name="${f.k}"><option value="">Sin categoría</option>${D[f.ref].map(o => `<option value="${esc(o.id)}" ${o.id === w[f.k] ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select>`
-      : f.area ? `<textarea name="${f.k}" rows="3">${esc(w[f.k] || '')}</textarea>` : `<input name="${f.k}" value="${esc(w[f.k] || '')}" class="${f.mono ? 'mono' : ''}">`}</label>`).join('')}
+      : f.area ? `<textarea name="${f.k}" rows="3">${esc(w[f.k] || '')}</textarea>` : `<input name="${f.k}" value="${esc(w[f.k] || '')}" class="${f.mono ? 'mono' : ''}" ${f.ph ? `placeholder="${esc(f.ph)}"` : ''}>`}</label>`).join('')}
     <div class="dlg-foot" style="margin-top:4px">${isNew ? '' : `<button type="button" class="btn danger" id="rdel">${icon('trash')}Eliminar</button><span class="sep"></span>`}<button type="button" class="btn" data-x>Cancelar</button><button class="btn primary">Guardar</button></div></form>`);
   dlg.bindClose();
   const f = $('#rf');
@@ -2150,6 +2288,11 @@ function editRecord(coll, x) {
     e.preventDefault();
     for (const fl of C.fields) { w[fl.k] = f.elements[fl.k].value.trim(); if (fl.req && !w[fl.k]) { f.elements[fl.k].focus(); return uiAlert(`Rellena «${fl.l}».`); } }
     if (coll === 'products' && D.products.some(p => p.id !== w.id && p.code.toLowerCase() === w.code.toLowerCase())) return uiAlert('Ya existe un producto con ese código.');
+    if (coll === 'companies') {
+      w.domains = domainsOf(w).join(', ');
+      if (!w.domains || domainsOf(w).some(x => !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(x))) return uiAlert('Escribe dominios válidos, por ejemplo: viteba.com');
+      const dup = domainsOf(w).find(x => D.companies.some(c => c.id !== w.id && domainsOf(c).includes(x))); if (dup) return uiAlert(`El dominio ${dup} ya pertenece a otra empresa.`);
+    }
     await store.put(coll, w); dlg.close(); toast('Guardado'); render();
   };
   if (!isNew) $('#rdel').onclick = async () => {
@@ -2165,16 +2308,17 @@ function viewUsers(m) {
   const rows = D.users.slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
   m.innerHTML = pageHead('Usuarios', 'Personas que pueden participar en los circuitos. Cada una entra con su correo; la primera vez elige su contraseña y registra su firma.', `<button type="button" class="btn primary" id="addU">${icon('plus')}Añadir persona</button>`) + `
     <section class="card flush"><div class="filters"><div class="search">${icon('search')}<input id="uq" type="search" placeholder="Buscar por nombre, correo o rol…" aria-label="Buscar"></div><span class="muted" style="font-size:13px">${rows.length} personas</span></div>
-    <div class="tablewrap"><table class="tbl"><thead><tr><th>Persona</th><th>Rol / cargo</th><th>Firma</th><th>Circuitos</th><th class="act"></th></tr></thead><tbody id="ub"></tbody></table></div></section>`;
+    <div class="tablewrap"><table class="tbl"><thead><tr><th>Persona</th><th>Empresa</th><th>Rol / cargo</th><th>Firma</th><th>Circuitos</th><th class="act"></th></tr></thead><tbody id="ub"></tbody></table></div></section>`;
   const draw = () => {
     const q = $('#uq').value.trim().toLowerCase();
     $('#ub').innerHTML = rows.filter(u => !q || [u.name, u.id, u.role].join(' ').toLowerCase().includes(q)).map(u => `<tr>
       <td><span class="who">${avatar(u.id)}<span><b>${esc(u.name || '—')}</b>${u.id === ME.id ? ' <span class="badge b-info" style="height:20px">Tú</span>' : ''}<small class="muted" style="display:block">${esc(u.id)}</small></span></span></td>
+      <td>${companyOf(u.id) ? esc(companyOf(u.id).name) : '<span class="muted">—</span>'}</td>
       <td>${esc(u.role || '—')}</td>
       <td>${u.signature ? `<img class="sigthumb" src="${u.signature}" alt="Firma de ${esc(u.name || u.id)}">` : '<span class="badge b-warn">Sin firma</span>'}</td>
       <td><div class="chips">${D.circuits.filter(c => allSignerEmails(c).includes(u.id)).map(c => `<span class="chip">${esc(c.name)}</span>`).join('') || '<span class="muted">—</span>'}</div></td>
       <td class="act"><button type="button" class="icon-btn sm" data-u="${esc(u.id)}" aria-label="Editar">${icon('pencil')}</button></td></tr>`).join('')
-      || `<tr><td colspan="5">${emptyState('users', 'Sin resultados', 'Prueba con otra búsqueda.', '', true)}</td></tr>`;
+      || `<tr><td colspan="6">${emptyState('users', 'Sin resultados', 'Prueba con otra búsqueda.', '', true)}</td></tr>`;
     $$('[data-u]', m).forEach(b => { b.onclick = () => editUser(userOf(b.dataset.u)); });
   };
   $('#uq').oninput = draw; draw();

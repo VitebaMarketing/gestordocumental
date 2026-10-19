@@ -637,3 +637,17 @@ dialog.xl .vscroll { height: min(64vh, calc(100vh - 240px)); }
 .flow.par li.grp { grid-column: span 2; }
 .flow li.grp .f-who b { white-space: normal; }
 @media (max-width: 520px) { .flow.par li.grp { grid-column: auto; } }
+
+/* ---------- Visibilidad por empresa / grupo / persona ---------- */
+.vis { display: grid; gap: 14px; margin-top: 8px; }
+.vis .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.vis-sec > b { font-size: 13.5px; }
+.vis-sec > .muted { font-size: 12.5px; }
+.vis-sec .gpick { margin-top: 8px; }
+.vis-note { font-size: 12.5px; margin: 0; }
+.co-ic { width: 26px; height: 26px; border-radius: 8px; background: var(--primary-soft); color: var(--primary); display: grid; place-items: center; flex: none; }
+.co-ic svg { width: 15px; height: 15px; }
+.gpick label .avstack { flex: none; }
+.vis-lock { display: inline-flex; vertical-align: -2px; color: var(--muted); }
+.vis-lock svg { width: 13px; height: 13px; }
+@media (max-width: 520px) { .vis .seg { grid-template-columns: 1fr; } }

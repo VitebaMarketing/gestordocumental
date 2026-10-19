@@ -149,3 +149,20 @@ Después, en `config.js` → bloque `sharepoint`, solo falta rellenar `tenantId`
 ### Etiquetas de privacidad
 
 Si la etiqueta que aplica SharePoint **cifra** el PDF, la plataforma no podría abrirlo para mostrar la vista previa ni para generar la portada de firmas. Por eso `keepBackup: true` guarda además una copia interna (Supabase) que solo se usa si la copia de SharePoint no se puede leer. Las descargas siempre se hacen desde SharePoint.
+
+## Visibilidad por empresa, grupo o persona
+
+Al subir un documento hay que indicar quién podrá verlo:
+
+- **Todo Gafial Group**, o
+- **Restringido** a una o varias **empresas** (según el dominio del correo: Administración › Empresas),
+  **grupos de usuarios** (Administración › Grupos de usuarios) y/o **personas concretas**.
+
+Quien sube el documento y las personas de su circuito de firma lo ven siempre. La visibilidad se puede
+cambiar después desde *Acciones › Cambiar visibilidad*.
+
+La restricción se aplica en la base de datos (políticas de Supabase en `supabase/schema.sql`): un documento
+restringido, sus firmas, su historial y sus archivos no se envían a quien no tiene acceso. Tras actualizar la
+app, vuelve a ejecutar `supabase/schema.sql` completo en Supabase → SQL Editor (se puede ejecutar varias veces).
+
+Los permisos de las carpetas de SharePoint no cambian: quien tenga acceso a la carpeta en SharePoint verá allí los archivos.
