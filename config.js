@@ -18,8 +18,8 @@ window.APP_CONFIG = {
      --------------------------------------------------------------------- */
   sharepoint: {
     enabled: true,                // se activa en cuanto se rellenan tenantId y clientId
-    tenantId: '',                 // ID de directorio (inquilino) de Microsoft Entra
-    clientId: '',                 // ID de aplicación (cliente) registrada por IT
+    tenantId: 'b5989bfa-2d0f-48cd-bf3a-980b751c284b',               // ID de directorio (inquilino) de Microsoft Entra
+    clientId: '24550dcc-6eae-4a7b-b8eb-6cf601b752e3',               // ID de aplicación (cliente) registrada por IT
     siteUrl: 'https://gafial.sharepoint.com/sites/VitebaSite',
     // Carpeta raíz: «10.Circuitos de firma» (enlace de SharePoint a la carpeta)
     rootShareUrl: 'https://gafial.sharepoint.com/:f:/s/VitebaSite/IgDHxzXRTmi_RLIdlL9il88gAayb_aZo-T90-I39KoJ0mu8?e=ZCwMzt',
